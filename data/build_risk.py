@@ -52,7 +52,7 @@ def download(path: Path) -> None:
 
 
 def load_crashes(path: Path, since: int | None = None, until: int | None = None,
-                 weights: str = "severity") -> gpd.GeoDataFrame:
+                 weights: str = "severity", halflife: float | None = None) -> gpd.GeoDataFrame:
     df = pd.read_csv(path)
     df = df[df["is_deleted"].astype(str).str.lower() != "true"]
     df = df.dropna(subset=["latitude", "longitude"])
@@ -70,6 +70,9 @@ def load_crashes(path: Path, since: int | None = None, until: int | None = None,
         w = df["crash_sev_id"].map(SEVERITY_WEIGHT).fillna(0.5)
         fatal = df["crash_fatal_fl"].astype(str).str.lower().eq("true") | (df["death_cnt"].fillna(0) > 0)
         df["weight"] = np.where(fatal, SEVERITY_WEIGHT[4], w)
+    if halflife:  # a crash `halflife` years older than the newest counts half as much
+        age = df["date"].dt.year.max() - df["date"].dt.year
+        df["weight"] = df["weight"] * 0.5 ** (age / halflife)
     df["is_left"] = df["collsn_desc"].fillna("").str.contains(LEFT_TURN_RE)
 
     gdf = gpd.GeoDataFrame(
@@ -117,11 +120,13 @@ def main() -> None:
     ap.add_argument("--weights", choices=("cost", "severity"), default="severity",
                     help="crash weighting: hand-set severity weights (default; best in backtest.py) "
                          "or the city's cost estimates")
+    ap.add_argument("--halflife", type=float, default=5.0,
+                    help="recency half-life in years (default 5; 0 = all years equal)")
     args = ap.parse_args()
 
     if args.refresh or not CSV_PATH.exists():
         download(CSV_PATH)
-    crashes = load_crashes(CSV_PATH, args.since, weights=args.weights)
+    crashes = load_crashes(CSV_PATH, args.since, weights=args.weights, halflife=args.halflife)
     print(f"{len(crashes):,} geocoded crashes, "
           f"{crashes['date'].min():%Y-%m-%d} to {crashes['date'].max():%Y-%m-%d}")
 

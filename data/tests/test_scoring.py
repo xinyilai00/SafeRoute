@@ -179,3 +179,29 @@ def test_pick_safest_respects_min_gain_and_budget():
     assert _pick_safest([fast, big_gain, too_slow], fast, 1.0, rules) is big_gain
     assert _pick_safest([fast, big_gain], fast, 0.0, rules) is fast       # safety_weight 0
     assert _pick_safest([fast, too_slow], fast, 1.0, {"max_detour": 1.6, "min_gain": 0.05}) is too_slow
+
+
+def test_route_rejects_outside_austin_and_same_point():
+    c = TestClient(app)
+    far = {**ROUTE_REQ, "destination": {"lat": 32.78, "lng": -96.80}}   # Dallas
+    assert c.post("/route", json=far).status_code == 422
+    same = {**ROUTE_REQ, "destination": ROUTE_REQ["origin"]}
+    assert c.post("/route", json=same).status_code == 422
+
+
+def test_risk_filter_is_cached_and_consistent():
+    c = TestClient(app)
+    a, b = c.get("/risk?min_risk=0.5"), c.get("/risk?min_risk=0.5")
+    assert a.content == b.content and a.headers["content-type"].startswith("application/geo+json")
+
+
+def test_curvy_route_costs_more_for_sensitive_passenger():
+    import math
+    lon0, lat0 = -98.05, 30.70          # empty land: no crash risk, so only curvature differs
+    straight = [[lon0 + i * 0.0004, lat0] for i in range(40)]
+    wavy = [[lon0 + i * 0.0004, lat0 + 0.0006 * math.sin(i / 3)] for i in range(40)]
+    sp_s, _ = scoring.score_route(straight, "sensitive_passenger")
+    sp_w, hz = scoring.score_route(wavy, "sensitive_passenger")
+    teen_w, _ = scoring.score_route(wavy, "teen")
+    assert sp_w > sp_s == 0 and teen_w == 0
+    assert any(h["type"] == "winding_road" for h in hz)

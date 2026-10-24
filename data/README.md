@@ -44,6 +44,9 @@ ngrok http 8000
 - Left-turn layer: crashes whose `collsn_desc` involves a left turn get their own grid value, `left_risk`. A left turn's penalty grows with `left_risk` at the turn's cell, and a left in a hot cell (>= 0.65) or on a fast road is reported as `left_turn_major`. In the backtest this layer predicts later left-turn crashes only marginally better than overall risk (39% vs 36% captured in the top 5% of cells).
 - Backtest (`python backtest.py`, train <= 2023, test 2024+): the top 10% of cells by risk captured about 56% of later crashes, vs ~10% by chance.
 - Routing rules (`ROUTING_RULES` in `app.py`): per-profile detour budget (teen 25%, elderly 35%, sensitive 30%) and a minimum risk gain (3-5%). If no alternative clears it, `/route` returns the fastest as the safest.
+- Recency: `build_risk.py` discounts older crashes with a 5-year half-life (`--halflife 0` to turn off). In the backtest this helped slightly; 3x3 spatial smoothing hurt, so it is not used.
+- Ride comfort: smooth curving along the route (heading change over 25 m steps, ignoring corners) is penalised for `sensitive_passenger` (0.03/degree) and a little for `elderly` (0.01/degree). It adds to `risk_score` only; it is not a contract event type.
+- `/route` rejects points outside the Austin pilot box (422) and identical origin/destination (422). `GET /risk?min_risk=` responses are cached in memory. `GH_URL` / `GH_PROFILE` can live in a gitignored `.env` (repo root or `data/`).
 - Crash risk = grid value sampled every 20 m, length-weighted.
 - "Unprotected left across a major road" approximation: a left where the cell's median crash speed limit is >= 40 mph, or the street name looks like a highway/arterial. Signal presence isn't known.
 - Quick turn after an exit: a maneuver within 300 m of a ramp/exit instruction. Exit detection reads the instruction `text` for "exit"/"ramp"; check against real GraphHopper output.

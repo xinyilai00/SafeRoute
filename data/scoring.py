@@ -31,6 +31,7 @@ PROFILES = {
         crash=10.0,         # risk points per full 200 m cell-length at risk=1.0
         left=1.5, sharp_left=2.5, slight_left=0.0,
         left_major=2.5,     # extra for a left at a fast-road cell (unprotected-left proxy)
+        curve=0.0,          # points per degree of smooth curving (ride comfort)
         left_crash=4.0,     # x left_risk (0..1): left-turn crash history at the turn's cell
         merge=1.5, roundabout=0.5, u_turn=2.0,
         quick_after_exit=2.5,
@@ -39,14 +40,14 @@ PROFILES = {
         crash=14.0,
         left=2.5, sharp_left=3.5, slight_left=0.5,
         left_major=4.0,
-        left_crash=5.0,
+        left_crash=5.0, curve=0.0,
         merge=3.0, roundabout=3.0, u_turn=2.0,
         quick_after_exit=3.0,
     ),
     "foot": dict(
         crash=12.0,
         left=0.0, sharp_left=0.0, slight_left=0.0,
-        left_major=0.0, left_crash=0.0,
+        left_major=0.0, left_crash=0.0, curve=0.0,
                             # for walkers a "turn" is a crossing; see crossing below
         merge=0.0, roundabout=1.5, u_turn=0.0,
         quick_after_exit=0.0,
@@ -59,17 +60,19 @@ PROFILES["teen"] = {**PROFILES["car"],
                     "quick_after_exit": 3.5}           # inexperienced: merges, fast lefts
 PROFILES["elderly"] = {**PROFILES["car"],
                        "crash": 11.0, "left": 2.5, "sharp_left": 3.5, "left_major": 4.0, "left_crash": 6.0,
-                       "merge": 2.0, "roundabout": 1.5, "u_turn": 3.0}  # lefts and complexity
+                       "merge": 2.0, "roundabout": 1.5, "u_turn": 3.0,
+                       "curve": 0.01}  # lefts and complexity
 PROFILES["sensitive_passenger"] = {**PROFILES["car"],
                                    "crash": 12.0, "sharp_left": 3.5, "merge": 2.0,
-                                   "roundabout": 1.5, "u_turn": 3.0}    # smooth, fewer hard turns
+                                   "roundabout": 1.5, "u_turn": 3.0,
+                                   "curve": 0.03}    # smooth ride, fewer hard turns
 ALIASES = {"driving": "car", "auto": "car", "cycling": "bike", "bicycle": "bike",
            "walking": "foot", "pedestrian": "foot", "walk": "foot"}
 
 FAST_MPH = 40               # cell speed limit at/above which a turn counts as "major road"
 QUICK_EXIT_M = 300.0        # next maneuver this soon after an exit = lane-change scramble
-HAZARD_CELL_RISK = 0.62     # crash-cell risk worth flagging (~top 10% of cells)
-LEFT_HOT = 0.65             # left_risk at/above which a left turn is flagged as a left-turn crash hot spot
+HAZARD_CELL_RISK = 0.57     # crash-cell risk worth flagging (~top 10% of cells)
+LEFT_HOT = 0.55             # left_risk at/above which a left turn is flagged as a left-turn crash hot spot
 MAJOR_NAME_HINTS = ("hwy", "highway", "pkwy", "parkway", "expy", "expressway", "fwy",
                     "freeway", "blvd", "loop", "ih ", "ih-", "us ", "fm ", "sh ")
 
@@ -178,6 +181,23 @@ def _crash_component(xy, cum, w):
     return crash * w["crash"], hazards
 
 
+CURVE_STEP_M = 25.0         # resampling distance for curvature
+CURVE_MAX_STEP_DEG = 25.0   # a bigger heading change within one step is a corner, scored as a turn instead
+
+
+def _curve_degrees(xy, cum):
+    """Total heading change (degrees) along smooth bends, ignoring corners."""
+    total = cum[-1]
+    if total < 2 * CURVE_STEP_M:
+        return 0.0
+    ds = np.arange(0.0, total, CURVE_STEP_M)
+    px = np.interp(ds, cum, xy[:, 0])
+    py = np.interp(ds, cum, xy[:, 1])
+    heading = np.degrees(np.arctan2(np.diff(py), np.diff(px)))
+    delta = np.abs((np.diff(heading) + 180.0) % 360.0 - 180.0)
+    return float(delta[delta < CURVE_MAX_STEP_DEG].sum())
+
+
 def crash_risk(polyline, profile="car", precision=5):
     """Crash-grid risk only (no turn penalties): (points, [high_crash_zone events]).
 
@@ -200,6 +220,14 @@ def score_route(polyline, profile="car", instructions=None, precision=5):
         return 0.0, []
     cells, cell_m, _ = _grid()
     score, hazards = _crash_component(xy, cum, w)
+
+    # ---- ride comfort: smooth curving, for profiles that care ----
+    curve_pts = w["curve"] * _curve_degrees(xy, cum)
+    if curve_pts >= 1.0:
+        score += curve_pts
+        lon0, lat0 = _to_utm().transform(*xy[0], direction="INVERSE")
+        hazards.append(dict(type="winding_road", lat=lat0, lon=lon0, distance_m=0,
+                            points=round(curve_pts, 2), description="Winding road with sharp curves"))
 
     # ---- 2. turn-instruction penalties ----
     prev_exit = None
@@ -284,6 +312,7 @@ _AVOID_LABELS = {
     "roundabout": ("roundabout", "roundabouts"),
     "u_turn": ("U-turn", "U-turns"),
     "high_crash_zone": ("high-crash zone", "high-crash zones"),
+    "winding_road": ("winding road", "winding roads"),
     "crossing": ("crossing of a fast road", "crossings of fast roads"),
 }
 

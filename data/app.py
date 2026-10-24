@@ -9,11 +9,12 @@ POST /route  fastest vs safest route (contract in ../CLAUDE.md). Set GH_URL to u
 from pathlib import Path
 
 import json
+import os
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import AliasChoices, BaseModel, Field
 
 import routing
@@ -21,7 +22,22 @@ from scoring import hazards_avoided, score_route, to_latlon
 
 RISK_PATH = Path(__file__).parent / "risk.geojson"
 
+
+def _load_env():
+    """Read KEY=VALUE lines from data/.env or the repo-root .env (both gitignored) into os.environ."""
+    for p in (Path(__file__).parent / ".env", Path(__file__).parent.parent / ".env"):
+        if p.exists():
+            for line in p.read_text().splitlines():
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    os.environ.setdefault(k.strip(), v.strip().strip("\"'"))
+
+
+_load_env()
+
 _cache = {}
+_filtered = {}  # serialized /risk?min_risk=X responses
 
 
 def _load():
@@ -41,9 +57,13 @@ def risk(min_risk: float = Query(0.0, ge=0, le=1)):
     if not RISK_PATH.exists():
         raise HTTPException(503, "risk.geojson missing; run `python build_risk.py`")
     if min_risk > 0:
-        gj = _load()
-        feats = [f for f in gj["features"] if f["properties"]["risk"] >= min_risk]
-        return JSONResponse({**gj, "features": feats}, media_type="application/geo+json")
+        key = round(min_risk, 2)
+        if key not in _filtered:
+            gj = _load()
+            feats = [f for f in gj["features"] if f["properties"]["risk"] >= key]
+            _filtered[key] = json.dumps({**gj, "features": feats}, separators=(",", ":")).encode()
+        return Response(_filtered[key], media_type="application/geo+json",
+                        headers={"Cache-Control": "public, max-age=3600"})
     return FileResponse(RISK_PATH, media_type="application/geo+json",
                         headers={"Cache-Control": "public, max-age=3600"})
 
@@ -72,6 +92,10 @@ MAX_CRASH_EVENTS = 5
 class Point(BaseModel):
     lat: float
     lng: float = Field(validation_alias=AliasChoices("lng", "lon"))
+
+
+# Pilot area; matches the crash grid. GraphHopper's map extract should cover at least this.
+BOUNDS = {"lat": (29.95, 30.75), "lng": (-98.1, -97.3)}
 
 
 class RouteRequest(BaseModel):
@@ -109,6 +133,11 @@ def _pick_safest(cands, fastest, w, rules):
 
 @app.post("/route")
 def route(req: RouteRequest):
+    for name, p in (("origin", req.origin), ("destination", req.destination)):
+        if not (BOUNDS["lat"][0] <= p.lat <= BOUNDS["lat"][1] and BOUNDS["lng"][0] <= p.lng <= BOUNDS["lng"][1]):
+            raise HTTPException(422, f"{name} is outside the Austin pilot area")
+    if abs(req.origin.lat - req.destination.lat) < 1e-4 and abs(req.origin.lng - req.destination.lng) < 1e-4:
+        raise HTTPException(422, "origin and destination are the same place")
     provider = routing.get_provider()
     try:
         cands = provider.routes(req.origin.model_dump(), req.destination.model_dump())
