@@ -38,10 +38,12 @@ If the phone is not plugged in, fall back to `-destination 'generic/platform=iOS
 
 The contract itself is in the root `CLAUDE.md`. App-side rules:
 
-- Base URL is a single constant in `Config.swift`. Placeholder: `"https://REPLACE-ME.ngrok-free.app"`. It gets swapped for the real ngrok URL when Annikka provides it.
+- Base URL is a single constant in `Config.swift`, currently Xinyi's ngrok tunnel (`data/app.py` on this branch of her work). The URL changes whenever ngrok restarts; get the new one from the team chat and update only that constant. If it contains `REPLACE-ME` the app runs on mocks.
 - **Mock fallback rule:** the backend may not exist yet. **Always** fall back to the hardcoded mock response in `Mocks/Mocks.swift` when the request fails or `Config.baseURL` still contains `REPLACE-ME`, so the UI is demoable at all times. The mock matches the contract exactly: UT campus → downtown, two different polylines with 20+ `[lat, lng]` points each, 2 to 3 `risk_events` per route placed on real polyline points. `Mocks.routeResponseJSON(for: profile)` returns raw JSON `Data` so it goes through the same decoder as a real response. Geometry, ETA and distance are identical across profiles; scores, hazards and the comparison differ per profile (teen: I-35 merge and high-speed arterial; elderly: unprotected left turns; sensitive_passenger: rough pavement and sharp curves) so switching profiles is visibly different. The placeholder-URL path sleeps 0.7 s before returning the mock so the loading state is visible; the network-failure fallback does not.
 - Request: `origin` and `destination` are `{"lat", "lng"}` (note `lng`, not `lon`). Send `"safety_weight": 1.0` for now; a slider may come in Step 5.
 - Coordinates: `geometry` is `[lat, lng]`, so pair `[0]` is latitude. GET /risk is GeoJSON, which is `[lng, lat]`, so flip when building polygon coordinates.
+- Heatmap: `RiskService` calls `GET /risk?min_risk=<Config.riskMinimum>` once per launch (cached in `MapScreenModel`), decodes only `features[].properties.risk` and `features[].geometry` (unknown keys such as the top-level `grid` are ignored), flips `[lng, lat]`, and draws each cell as a `MapPolygon` from yellow to red. No mock: on failure the "Risk map" toggle is hidden. Cell counts per threshold are noted next to `Config.riskMinimum`; raise it if the device stutters.
+- Backend errors: `/route` returns 404 (no route), 422 (bad profile / `safety_weight`), 502 (engine down); any non-2xx falls back to mocks. Both services send `ngrok-skip-browser-warning: true`; `/route` times out after 10 s, `/risk` after 20 s.
 - Display: distances in **miles**, converted from `distance_km` (× 0.621371). `risk_score` is penalty points, lower is safer; show the comparison (`minutes_added`, `risk_reduction_pct`, `summary`) rather than raw scores.
 
 ## Architecture
@@ -49,8 +51,8 @@ The contract itself is in the root `CLAUDE.md`. App-side rules:
 ```
 SafeRoute/
   App/        SafeRouteApp.swift, ContentView.swift
-  Models/     Route.swift, RouteResponse.swift (Codable), Profile.swift (enum: display name + SF Symbol)
-  Services/   RouteService.swift (URLSession, async/await), LocationManager.swift, SearchService.swift (MKLocalSearch)
+  Models/     Route.swift, RouteResponse.swift (Codable), RiskGrid.swift (GeoJSON -> RiskCell), Profile.swift (enum: display name + SF Symbol)
+  Services/   RouteService.swift (POST /route), RiskService.swift (GET /risk), LocationManager.swift, SearchService.swift (MKLocalSearch)
   Views/      MapScreen.swift, MapScreenModel.swift (@Observable screen state), SearchBar.swift, ProfilePicker.swift, RouteSummaryCard.swift
   Mocks/      Mocks.swift
   Config.swift
@@ -69,5 +71,5 @@ SafeRoute/
 - [x] **Step 1:** Full-screen Map centered on the user's location with the blue location dot, plus a search bar at the top using MKLocalSearch to pick a destination. Tapping a result drops a pin and stores the destination coordinate. Folder structure, `Config.swift`, `Profile.swift`, `Mocks.swift` created. Location permission key added by the owner.
 - [x] **Step 2:** `RouteService` calling POST /route with Codable models: request `{origin: {lat, lng}, destination: {lat, lng}, profile, safety_weight: 1.0}`, response `fastest` / `safest` (`geometry`, `eta_minutes`, `distance_km`, `risk_score`, `risk_events[]`) and `comparison` (`minutes_added`, `risk_reduction_pct`, `summary`). Mock fallback per the rule above, and a "Find safest route" button that triggers it once origin (user location) and destination are set.
 - [x] **Step 3:** Draw `fastest.geometry` and `safest.geometry` as `MapPolyline`s in different colors (gray for fastest, green for safest). Show `safest.risk_events` as small markers on the map at their `lat`/`lng`, with a symbol per `type`. Bottom glass card showing `comparison.minutes_added`, `comparison.risk_reduction_pct`, `comparison.summary`, and each route's ETA and distance in miles (converted from `distance_km`). Add the `ProfilePicker` as a segmented control above the card.
-- [ ] **Step 4:** Risk heatmap toggle that fetches GET /risk and renders each polygon with `MapPolygon` colored by `properties.risk` (0 to 1). Flip GeoJSON `[lng, lat]` to coordinates.
-- [ ] **Step 5:** Polish: animations when routes appear, dark mode check, SF Symbols for each profile and each `risk_events` type, a small legend. Possibly a `safety_weight` slider (0 = fastest, 1 = safest; fixed at 1.0 until then).
+- [x] **Step 4:** Risk heatmap toggle that fetches GET /risk and renders each polygon with `MapPolygon` colored by `properties.risk` (0 to 1). Flip GeoJSON `[lng, lat]` to coordinates.
+- [ ] **Step 5:** Polish: animations when routes appear, dark mode check, SF Symbols for each profile and each `risk_events` type, a small legend. Possibly a `safety_weight` slider (0 = fastest, 1 = safest; fixed at 1.0 until then). Starting points: commit `b5c6625` (replaced by the Step 4 merge) contains a `HeatmapLegend` and a `SafetySlider` in `HeatmapControls.swift`; copy from git history rather than re-merging it.

@@ -6,43 +6,67 @@
 import CoreLocation
 import Foundation
 
-/// GET /risk response: a GeoJSON FeatureCollection of polygons, each with `properties.risk` in 0...1.
-nonisolated struct RiskGridResponse: Decodable {
-    let features: [Feature]
+/// GET /risk payload: a GeoJSON FeatureCollection of 200 m cells with `properties.risk` in 0...1.
+/// Only the keys the app needs are decoded; everything else in the GeoJSON is ignored.
+nonisolated struct RiskFeatureCollection: Decodable {
+    let features: [RiskFeature]
 
-    struct Feature: Decodable {
-        let geometry: Geometry
-        let properties: Properties
-    }
-
-    struct Geometry: Decodable {
-        /// Polygon rings of `[lng, lat]` pairs (standard GeoJSON order).
-        let coordinates: [[[Double]]]
-    }
-
-    struct Properties: Decodable {
-        let risk: Double
+    /// Drawable cells. GeoJSON coordinates are `[lng, lat]`; this flips them.
+    var cells: [RiskCell] {
+        var cells: [RiskCell] = []
+        for feature in features {
+            for ring in feature.geometry.outerRings {
+                let coordinates = ring.compactMap { point -> CLLocationCoordinate2D? in
+                    guard point.count >= 2 else { return nil }
+                    return CLLocationCoordinate2D(latitude: point[1], longitude: point[0])
+                }
+                guard coordinates.count >= 3 else { continue }
+                cells.append(RiskCell(id: cells.count, risk: feature.properties.risk, coordinates: coordinates))
+            }
+        }
+        return cells
     }
 }
 
-/// One heatmap cell, ready to draw.
-nonisolated struct RiskCell: Identifiable, Equatable {
-    let id: Int
-    /// Outer ring as map coordinates (GeoJSON `[lng, lat]` flipped to latitude/longitude).
-    let ring: [CLLocationCoordinate2D]
+nonisolated struct RiskFeature: Decodable {
+    let properties: RiskProperties
+    let geometry: RiskGeometry
+}
+
+nonisolated struct RiskProperties: Decodable {
     let risk: Double
+}
 
-    static func == (lhs: RiskCell, rhs: RiskCell) -> Bool { lhs.id == rhs.id && lhs.risk == rhs.risk }
+/// Polygon or MultiPolygon geometry reduced to its outer rings (holes are dropped).
+nonisolated struct RiskGeometry: Decodable {
+    let type: String
+    /// One outer ring per polygon, each a list of `[lng, lat]` points.
+    let outerRings: [[[Double]]]
 
-    static func cells(from response: RiskGridResponse) -> [RiskCell] {
-        response.features.enumerated().compactMap { index, feature in
-            guard let outer = feature.geometry.coordinates.first else { return nil }
-            let ring = outer.compactMap { pair -> CLLocationCoordinate2D? in
-                guard pair.count >= 2 else { return nil }
-                return CLLocationCoordinate2D(latitude: pair[1], longitude: pair[0])
-            }
-            guard ring.count >= 3 else { return nil }
-            return RiskCell(id: index, ring: ring, risk: feature.properties.risk)
+    private enum CodingKeys: String, CodingKey {
+        case type, coordinates
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        type = try container.decode(String.self, forKey: .type)
+        switch type {
+        case "Polygon":
+            let rings = try container.decode([[[Double]]].self, forKey: .coordinates)
+            outerRings = rings.first.map { [$0] } ?? []
+        case "MultiPolygon":
+            let polygons = try container.decode([[[[Double]]]].self, forKey: .coordinates)
+            outerRings = polygons.compactMap(\.first)
+        default:
+            outerRings = []
         }
     }
+}
+
+/// One heatmap cell ready for `MapPolygon`.
+nonisolated struct RiskCell: Identifiable {
+    let id: Int
+    /// 0...1, higher is riskier.
+    let risk: Double
+    let coordinates: [CLLocationCoordinate2D]
 }

@@ -21,10 +21,11 @@ struct MapScreen: View {
             Map(position: $cameraPosition, scope: mapScope) {
                 UserAnnotation()
 
-                if model.showHeatmap {
-                    ForEach(model.heatmapCells) { cell in
-                        MapPolygon(coordinates: cell.ring)
-                            .foregroundStyle(HeatmapStyle.color(for: cell.risk).opacity(HeatmapStyle.opacity(for: cell.risk)))
+                if model.showsRiskHeatmap, let cells = model.riskCells {
+                    ForEach(cells) { cell in
+                        MapPolygon(coordinates: cell.coordinates)
+                            .foregroundStyle(heatColor(for: cell.risk))
+                            .stroke(.clear, lineWidth: 0)
                     }
                 }
 
@@ -59,15 +60,6 @@ struct MapScreen: View {
                 bottomPanel
             }
 
-            if model.showHeatmap {
-                HeatmapLegend(isDemoData: model.isHeatmapDemoData)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .padding(.leading, 16)
-                    .padding(.top, searchBarReserve + 12)
-                    .transition(.opacity)
-                    .allowsHitTesting(false)
-            }
-
             SearchBar(userLocation: locationManager.coordinate) { item in
                 model.selectDestination(item)
                 frameCamera(around: item.location.coordinate)
@@ -77,7 +69,10 @@ struct MapScreen: View {
         }
         .mapScope(mapScope)
         .ignoresSafeArea(.keyboard)
-        .onAppear { locationManager.start() }
+        .onAppear {
+            locationManager.start()
+            model.loadRiskGridIfNeeded()
+        }
         .onChange(of: model.profile) { _, _ in
             // Re-request only if a route is showing or being fetched; otherwise wait for the button.
             if model.result != nil || model.isLoading {
@@ -95,18 +90,15 @@ struct MapScreen: View {
 
     private var bottomPanel: some View {
         VStack(alignment: .trailing, spacing: 12) {
-            HStack(alignment: .bottom) {
-                HeatmapToggle(isOn: $model.showHeatmap, isLoading: model.isHeatmapLoading)
-                Spacer()
+            HStack(spacing: 12) {
+                if model.isRiskGridAvailable {
+                    heatmapToggle
+                }
                 MapUserLocationButton(scope: mapScope)
             }
 
             if model.destination != nil {
                 ProfilePicker(selection: $model.profile)
-
-                if model.result != nil {
-                    SafetySlider(value: $model.safetyWeight) { findRoute() }
-                }
 
                 if let result = model.result {
                     RouteSummaryCard(result: result, isReloading: model.isLoading)
@@ -138,6 +130,37 @@ struct MapScreen: View {
         .buttonStyle(.glass)
         .controlSize(.large)
         .disabled(model.isLoading)
+    }
+
+    private var heatmapToggle: some View {
+        Button {
+            model.showsRiskHeatmap.toggle()
+        } label: {
+            HStack(spacing: 6) {
+                if model.riskCells == nil {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: model.showsRiskHeatmap ? "flame.fill" : "flame")
+                        .foregroundStyle(model.showsRiskHeatmap ? .red : .primary)
+                }
+                Text("Risk map")
+            }
+            .font(.subheadline.weight(.semibold))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 6)
+        }
+        .buttonStyle(.glass)
+        .disabled(model.riskCells == nil)
+        .accessibilityLabel(model.showsRiskHeatmap ? "Hide risk map" : "Show risk map")
+    }
+
+    /// Yellow (at `Config.riskMinimum`) through orange to red (risk 1.0), semi-transparent.
+    private func heatColor(for risk: Double) -> Color {
+        let span = max(1 - Config.riskMinimum, 0.01)
+        let t = min(max((risk - Config.riskMinimum) / span, 0), 1)
+        return Color(hue: (1 - t) * (60.0 / 360.0), saturation: 0.95, brightness: 1)
+            .opacity(0.3 + 0.3 * t)
     }
 
     // MARK: - Actions

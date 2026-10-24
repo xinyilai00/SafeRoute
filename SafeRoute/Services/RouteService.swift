@@ -12,7 +12,8 @@ nonisolated struct RouteResult: Equatable {
     let isDemoData: Bool
 }
 
-nonisolated enum RouteServiceError: Error {
+/// Errors shared by the backend services.
+nonisolated enum BackendError: Error {
     case badURL
     case badStatus(Int)
 }
@@ -42,8 +43,8 @@ nonisolated struct RouteService {
                 profile: profile,
                 safetyWeight: safetyWeight
             )
-            guard let url = URL(string: Config.baseURL + "/route") else { throw RouteServiceError.badURL }
-            var request = URLRequest(url: url, timeoutInterval: 15)
+            guard let url = URL(string: Config.baseURL + "/route") else { throw BackendError.badURL }
+            var request = URLRequest(url: url, timeoutInterval: 10)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -53,7 +54,7 @@ nonisolated struct RouteService {
 
             let (data, response) = try await URLSession.shared.data(for: request)
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-                throw RouteServiceError.badStatus(http.statusCode)
+                throw BackendError.badStatus(http.statusCode)
             }
             return RouteResult(response: try decoder.decode(RouteResponse.self, from: data), isDemoData: false)
         } catch let error as URLError where error.code == .cancelled {

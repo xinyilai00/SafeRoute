@@ -11,21 +11,48 @@ import Observation
 @Observable
 final class MapScreenModel {
     var profile: Profile = .teen
-    /// 0 = fastest, 1 = safest; sent as `safety_weight`.
-    var safetyWeight: Double = Config.defaultSafetyWeight
-    var showHeatmap = false {
-        didSet { if showHeatmap { loadHeatmapIfNeeded() } }
-    }
-    private(set) var heatmapCells: [RiskCell] = []
-    private(set) var isHeatmapLoading = false
-    private(set) var isHeatmapDemoData = false
     private(set) var destination: MKMapItem?
     private(set) var result: RouteResult?
     private(set) var isLoading = false
 
+    /// Crash-risk heatmap cells: fetched once per launch and cached here.
+    private(set) var riskGrid: RiskGridState = .loading
+    var showsRiskHeatmap = false
+
+    enum RiskGridState {
+        case loading
+        case loaded([RiskCell])
+        case failed
+    }
+
+    var riskCells: [RiskCell]? {
+        if case .loaded(let cells) = riskGrid { return cells }
+        return nil
+    }
+
+    /// False once the fetch failed; the toggle is hidden in that case.
+    var isRiskGridAvailable: Bool {
+        if case .failed = riskGrid { return false }
+        return true
+    }
+
     @ObservationIgnored private let routeService = RouteService()
-    @ObservationIgnored private var routeTask: Task<Void, Never>?
     @ObservationIgnored private let riskService = RiskService()
+    @ObservationIgnored private var routeTask: Task<Void, Never>?
+    @ObservationIgnored private var riskTask: Task<Void, Never>?
+
+    /// Fetches GET /risk the first time it is called; later calls are no-ops.
+    func loadRiskGridIfNeeded() {
+        guard riskTask == nil else { return }
+        riskTask = Task {
+            do {
+                riskGrid = .loaded(try await riskService.fetchRiskCells())
+            } catch {
+                riskGrid = .failed
+                print("MapScreenModel: risk grid unavailable, hiding heatmap toggle. \(error)")
+            }
+        }
+    }
 
     /// Picking a destination clears any routes for the previous one.
     func selectDestination(_ item: MKMapItem) {
@@ -44,7 +71,6 @@ final class MapScreenModel {
         let originCoordinate = origin ?? Config.fallbackOrigin
         let destinationCoordinate = destination.location.coordinate
         let profile = profile
-        let safetyWeight = safetyWeight
         isLoading = true
 
         routeTask = Task {
@@ -52,8 +78,7 @@ final class MapScreenModel {
                 let result = try await routeService.fetchRoute(
                     origin: originCoordinate,
                     destination: destinationCoordinate,
-                    profile: profile,
-                    safetyWeight: safetyWeight
+                    profile: profile
                 )
                 guard !Task.isCancelled else { return }
                 self.result = result
@@ -63,18 +88,6 @@ final class MapScreenModel {
                 print("MapScreenModel: route request failed. \(error)")
             }
             isLoading = false
-        }
-    }
-
-    /// Fetches the heatmap once, the first time it is switched on.
-    private func loadHeatmapIfNeeded() {
-        guard heatmapCells.isEmpty, !isHeatmapLoading else { return }
-        isHeatmapLoading = true
-        Task {
-            let loaded = await riskService.fetchCells()
-            heatmapCells = loaded.cells
-            isHeatmapDemoData = loaded.isDemoData
-            isHeatmapLoading = false
         }
     }
 }

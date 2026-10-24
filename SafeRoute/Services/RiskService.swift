@@ -5,33 +5,27 @@
 
 import Foundation
 
-/// Loads the heatmap cells from GET /risk, falling back to the bundled sample (`Mocks.riskGridJSON`)
-/// when the backend is unconfigured or the request fails.
+/// Fetches the crash-risk grid (GET /risk). No mock: if this fails the heatmap toggle is hidden.
 nonisolated struct RiskService {
-    /// Cells below this risk are not requested: it keeps the polygon count (and the download) small.
-    static let minRisk = 0.45
-
-    private let decoder = JSONDecoder()
-
-    func fetchCells() async -> (cells: [RiskCell], isDemoData: Bool) {
-        if Config.isBackendConfigured, let cells = try? await fetchFromBackend() {
-            return (cells, false)
+    /// Decodes off the main actor; the payload is about 1 MB at the default threshold.
+    @concurrent
+    func fetchRiskCells(minRisk: Double = Config.riskMinimum) async throws -> [RiskCell] {
+        guard Config.isBackendConfigured,
+              var components = URLComponents(string: Config.baseURL + "/risk") else {
+            throw BackendError.badURL
         }
-        let sample = (try? decoder.decode(RiskGridResponse.self, from: Mocks.riskGridJSON))
-            .map(RiskCell.cells(from:)) ?? []
-        return (sample, true)
-    }
+        components.queryItems = [URLQueryItem(name: "min_risk", value: String(minRisk))]
+        guard let url = components.url else { throw BackendError.badURL }
 
-    private func fetchFromBackend() async throws -> [RiskCell] {
-        guard let url = URL(string: Config.baseURL + "/risk?min_risk=\(Self.minRisk)") else {
-            throw RouteServiceError.badURL
-        }
         var request = URLRequest(url: url, timeoutInterval: 20)
+        request.setValue("application/geo+json, application/json", forHTTPHeaderField: "Accept")
+        // Free-tier ngrok shows an HTML interstitial unless this header is present.
         request.setValue("true", forHTTPHeaderField: "ngrok-skip-browser-warning")
+
         let (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw RouteServiceError.badStatus(http.statusCode)
+            throw BackendError.badStatus(http.statusCode)
         }
-        return RiskCell.cells(from: try decoder.decode(RiskGridResponse.self, from: data))
+        return try JSONDecoder().decode(RiskFeatureCollection.self, from: data).cells
     }
 }
