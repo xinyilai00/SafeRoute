@@ -118,8 +118,9 @@ def route(req: RouteRequest):
     if safest is fastest:
         summary = "Fastest route is also the safest"
     else:
-        summary = f"+{round(added)} min, " + (f"avoids {', '.join(avoided)}" if avoided
-                                              else "lower crash exposure")
+        lead = f"+{round(added)} min" if round(added) > 0 else "Same time"
+        summary = f"{lead}, " + (f"avoids {', '.join(avoided)}" if avoided
+                                 else "lower crash exposure")
     body = {
         "fastest": _summary(fastest),
         "safest": _summary(safest),

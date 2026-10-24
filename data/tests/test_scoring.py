@@ -138,3 +138,8 @@ def test_crash_risk_standalone():
     pts, events = scoring.crash_risk(DOWNTOWN, "teen")
     assert pts > 0 and events and all(e["type"] == "high_crash_zone" for e in events)
     assert scoring.crash_risk(EMPTY, "teen") == (0.0, [])
+
+
+def test_summary_has_no_zero_minute_lead():
+    b = TestClient(app).post("/route", json=ROUTE_REQ).json()
+    assert not b["comparison"]["summary"].startswith("+0")
