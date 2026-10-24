@@ -31,6 +31,7 @@ PROFILES = {
         crash=10.0,         # risk points per full 200 m cell-length at risk=1.0
         left=1.5, sharp_left=2.5, slight_left=0.0,
         left_major=2.5,     # extra for a left at a fast-road cell (unprotected-left proxy)
+        left_crash=4.0,     # x left_risk (0..1): left-turn crash history at the turn's cell
         merge=1.5, roundabout=0.5, u_turn=2.0,
         quick_after_exit=2.5,
     ),
@@ -38,13 +39,15 @@ PROFILES = {
         crash=14.0,
         left=2.5, sharp_left=3.5, slight_left=0.5,
         left_major=4.0,
+        left_crash=5.0,
         merge=3.0, roundabout=3.0, u_turn=2.0,
         quick_after_exit=3.0,
     ),
     "foot": dict(
         crash=12.0,
         left=0.0, sharp_left=0.0, slight_left=0.0,
-        left_major=0.0,     # for walkers a "turn" is a crossing; see crossing below
+        left_major=0.0, left_crash=0.0,
+                            # for walkers a "turn" is a crossing; see crossing below
         merge=0.0, roundabout=1.5, u_turn=0.0,
         quick_after_exit=0.0,
         crossing=1.5,       # any turn onto a fast road means crossing it
@@ -55,7 +58,7 @@ PROFILES["teen"] = {**PROFILES["car"],
                     "crash": 11.0, "merge": 2.5, "left_major": 3.5, "roundabout": 1.0,
                     "quick_after_exit": 3.5}           # inexperienced: merges, fast lefts
 PROFILES["elderly"] = {**PROFILES["car"],
-                       "crash": 11.0, "left": 2.5, "sharp_left": 3.5, "left_major": 4.0,
+                       "crash": 11.0, "left": 2.5, "sharp_left": 3.5, "left_major": 4.0, "left_crash": 6.0,
                        "merge": 2.0, "roundabout": 1.5, "u_turn": 3.0}  # lefts and complexity
 PROFILES["sensitive_passenger"] = {**PROFILES["car"],
                                    "crash": 12.0, "sharp_left": 3.5, "merge": 2.0,
@@ -65,7 +68,8 @@ ALIASES = {"driving": "car", "auto": "car", "cycling": "bike", "bicycle": "bike"
 
 FAST_MPH = 40               # cell speed limit at/above which a turn counts as "major road"
 QUICK_EXIT_M = 300.0        # next maneuver this soon after an exit = lane-change scramble
-HAZARD_CELL_RISK = 0.6      # crash-cell risk worth flagging on the map
+HAZARD_CELL_RISK = 0.62     # crash-cell risk worth flagging (~top 10% of cells)
+LEFT_HOT = 0.65             # left_risk at/above which a left turn is flagged as a left-turn crash hot spot
 MAJOR_NAME_HINTS = ("hwy", "highway", "pkwy", "parkway", "expy", "expressway", "fwy",
                     "freeway", "blvd", "loop", "ih ", "ih-", "us ", "fm ", "sh ")
 
@@ -82,7 +86,7 @@ def _grid():
     cells = {}
     for f in gj["features"]:
         p = f["properties"]
-        cells[(p["ix"], p["iy"])] = (p["risk"], p.get("speed") or 0.0)
+        cells[(p["ix"], p["iy"])] = (p["risk"], p.get("speed") or 0.0, p.get("left_risk") or 0.0)
     return cells, cell_m, gj["grid"]["crs"]
 
 
@@ -130,7 +134,7 @@ def _norm_profile(profile: str) -> str:
 
 
 def _lookup(cells, cell_m, x, y):
-    return cells.get((int(np.floor(x / cell_m)), int(np.floor(y / cell_m))), (0.0, 0.0))
+    return cells.get((int(np.floor(x / cell_m)), int(np.floor(y / cell_m))), (0.0, 0.0, 0.0))
 
 
 def _project(polyline, precision=5):
@@ -162,7 +166,7 @@ def _crash_component(xy, cum, w):
     for k in range(n):
         d = (k + 0.5) * step
         x, y = at(d)
-        risk, _ = _lookup(cells, cell_m, x, y)
+        risk = _lookup(cells, cell_m, x, y)[0]
         crash += risk * step / cell_m
         cell = (int(np.floor(x / cell_m)), int(np.floor(y / cell_m)))
         if risk >= HAZARD_CELL_RISK and cell not in flagged:
@@ -204,7 +208,7 @@ def score_route(polyline, profile="car", instructions=None, precision=5):
         start = (ins.get("interval") or [0, 0])[0]
         start = min(max(start, 0), len(xy) - 1)
         x, y = xy[start]
-        _, speed = _lookup(cells, cell_m, x, y)
+        _, speed, left_risk = _lookup(cells, cell_m, x, y)
         street = (ins.get("street_name") or "").lower()
         text = (ins.get("text") or "").lower()
         fast = speed >= FAST_MPH or any(h in street for h in MAJOR_NAME_HINTS)
@@ -212,9 +216,17 @@ def score_route(polyline, profile="car", instructions=None, precision=5):
 
         if sign in (LEFT, SHARP_LEFT, SLIGHT_LEFT):
             pts = {LEFT: w["left"], SHARP_LEFT: w["sharp_left"], SLIGHT_LEFT: w["slight_left"]}[sign]
-            if fast and sign != SLIGHT_LEFT:
-                pts += w["left_major"]
-                kind, desc = "left_turn_major", "Left turn across a fast/major road"
+            if sign != SLIGHT_LEFT:
+                pts += w["left_crash"] * left_risk
+                hot = left_risk >= LEFT_HOT
+                if fast:
+                    pts += w["left_major"]
+                if fast or hot:
+                    kind = "left_turn_major"
+                    desc = ("Left turn where left-turn crashes are common" if hot
+                            else "Left turn across a fast/major road")
+                elif pts:
+                    kind, desc = "left_turn", "Left turn"
             elif pts:
                 kind, desc = "left_turn", "Left turn"
         elif sign in (KEEP_LEFT, KEEP_RIGHT):

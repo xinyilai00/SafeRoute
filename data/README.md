@@ -40,7 +40,10 @@ ngrok http 8000
 
 ## Method notes
 
-- Severity weights (build_risk.py): fatal 10, serious 6, non-incapacitating 2, possible 1, no injury 0.5. Cell value is log-scaled, then divided by the max, so the heatmap isn't one red dot.
+- Severity weights (build_risk.py): fatal 10, serious 6, non-incapacitating 2, possible 1, no injury 0.5. Cell value is log-scaled, then divided by the max, so the heatmap isn't one red dot. `--weights cost` uses the city's per-crash cost estimates instead; `backtest.py` shows it predicts later crashes slightly worse (rare fatals add noise), so severity is the default.
+- Left-turn layer: crashes whose `collsn_desc` involves a left turn get their own grid value, `left_risk`. A left turn's penalty grows with `left_risk` at the turn's cell, and a left in a hot cell (>= 0.65) or on a fast road is reported as `left_turn_major`. In the backtest this layer predicts later left-turn crashes only marginally better than overall risk (39% vs 36% captured in the top 5% of cells).
+- Backtest (`python backtest.py`, train <= 2023, test 2024+): the top 10% of cells by risk captured about 56% of later crashes, vs ~10% by chance.
+- Routing rules (`ROUTING_RULES` in `app.py`): per-profile detour budget (teen 25%, elderly 35%, sensitive 30%) and a minimum risk gain (3-5%). If no alternative clears it, `/route` returns the fastest as the safest.
 - Crash risk = grid value sampled every 20 m, length-weighted.
 - "Unprotected left across a major road" approximation: a left where the cell's median crash speed limit is >= 40 mph, or the street name looks like a highway/arterial. Signal presence isn't known.
 - Quick turn after an exit: a maneuver within 300 m of a ramp/exit instruction. Exit detection reads the instruction `text` for "exit"/"ramp"; check against real GraphHopper output.

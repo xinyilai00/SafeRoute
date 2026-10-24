@@ -53,7 +53,15 @@ def health():
     return {"ok": True}
 
 
-MAX_DETOUR = 1.25  # safest route may be at most 25% slower than the fastest
+# Per profile: how much slower the safest route may be, and the smallest risk drop worth a detour.
+# If the best alternative saves less than min_gain of the fastest route's risk, we just return the
+# fastest (fastest == safest) rather than make the driver lose minutes for nothing.
+ROUTING_RULES = {
+    "teen": {"max_detour": 1.25, "min_gain": 0.05},
+    "elderly": {"max_detour": 1.35, "min_gain": 0.03},
+    "sensitive_passenger": {"max_detour": 1.30, "min_gain": 0.03},
+}
+DEFAULT_RULES = {"max_detour": 1.25, "min_gain": 0.05}
 KM_PER_MILE = 1.609344
 # Event types allowed by the API contract; other hazards (roundabout, u_turn, crossing) still
 # add to risk_score but aren't listed, so the app never sees an unknown type.
@@ -88,11 +96,15 @@ def _summary(c):
             "risk_score": round(c["score"], 1), "risk_events": _events(c["hazards"])}
 
 
-def _pick_safest(cands, fastest, w):
-    """w=0 -> the fastest; w=1 -> lowest risk within the detour budget; between = blend."""
-    ok = [c for c in cands if c["minutes"] <= fastest["minutes"] * MAX_DETOUR]
+def _pick_safest(cands, fastest, w, rules):
+    """w=0 -> the fastest; w=1 -> lowest risk within the detour budget; between = blend.
+    Falls back to the fastest when the winner doesn't beat it by rules["min_gain"]."""
+    ok = [c for c in cands if c["minutes"] <= fastest["minutes"] * rules["max_detour"]]
     fs = fastest["score"] or 1.0
-    return min(ok, key=lambda c: (1 - w) * c["minutes"] / fastest["minutes"] + w * c["score"] / fs)
+    best = min(ok, key=lambda c: (1 - w) * c["minutes"] / fastest["minutes"] + w * c["score"] / fs)
+    if fastest["score"] > 0 and (fastest["score"] - best["score"]) / fastest["score"] < rules["min_gain"]:
+        return fastest
+    return best
 
 
 @app.post("/route")
@@ -111,12 +123,13 @@ def route(req: RouteRequest):
         raise HTTPException(422, str(e))
 
     fastest = min(cands, key=lambda c: c["minutes"])
-    safest = _pick_safest(cands, fastest, req.safety_weight)
+    safest = _pick_safest(cands, fastest, req.safety_weight,
+                          ROUTING_RULES.get(req.profile, DEFAULT_RULES))
     f, s = fastest["score"], safest["score"]
     added = round(safest["minutes"] - fastest["minutes"], 1)
     avoided = hazards_avoided(fastest["hazards"], safest["hazards"])
     if safest is fastest:
-        summary = "Fastest route is also the safest"
+        summary = "Fastest route is also the safest (alternatives are not meaningfully safer)"
     else:
         lead = f"+{round(added)} min" if round(added) > 0 else "Same time"
         summary = f"{lead}, " + (f"avoids {', '.join(avoided)}" if avoided

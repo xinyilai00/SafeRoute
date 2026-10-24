@@ -24,7 +24,7 @@ OUT_PATH = HERE / "risk.geojson"
 # "Austin Crash Report Data - Crash Level Records" (Vision Zero), Socrata id y2wy-tgr5
 CSV_URL = "https://data.austintexas.gov/resource/y2wy-tgr5.csv"
 COLUMNS = ("id,crash_timestamp_ct,latitude,longitude,crash_sev_id,crash_fatal_fl,"
-           "death_cnt,crash_speed_limit,is_deleted")
+           "death_cnt,crash_speed_limit,is_deleted,collsn_desc,est_comp_cost_crash_based")
 
 CELL_M = 200
 UTM = "EPSG:32614"  # UTM zone 14N, metres; covers Austin
@@ -32,8 +32,15 @@ UTM = "EPSG:32614"  # UTM zone 14N, metres; covers Austin
 LON_RANGE, LAT_RANGE = (-98.1, -97.3), (29.95, 30.75)
 
 # CRIS crash_sev_id: 4 killed, 1 suspected serious, 2 non-incapacitating,
-# 3 possible injury, 5 not injured, 0 unknown.
+# 3 possible injury, 5 not injured, 0 unknown. Used with --weights severity.
 SEVERITY_WEIGHT = {4: 10.0, 1: 6.0, 2: 2.0, 3: 1.0, 5: 0.5, 0: 0.5}
+# --weights cost: the city's own estimated comprehensive cost per crash (about $25k for a
+# no-injury crash up to ~$4.4M for a fatal one), in units of that $25k baseline. backtest.py shows
+# it predicts later crashes slightly worse than severity weights (rare fatals add noise).
+COST_UNIT = 25_000.0
+# Collision descriptions that involve a left turn ("ANGLE - ONE STRAIGHT-ONE LEFT TURN",
+# "ONE MOTOR VEHICLE - TURNING LEFT", ...). Drives the left-turn crash layer.
+LEFT_TURN_RE = "LEFT TURN|TURNING LEFT"
 
 
 def download(path: Path) -> None:
@@ -44,7 +51,8 @@ def download(path: Path) -> None:
     print(f"saved {path} ({path.stat().st_size / 1e6:.1f} MB)")
 
 
-def load_crashes(path: Path, since: int | None) -> gpd.GeoDataFrame:
+def load_crashes(path: Path, since: int | None = None, until: int | None = None,
+                 weights: str = "severity") -> gpd.GeoDataFrame:
     df = pd.read_csv(path)
     df = df[df["is_deleted"].astype(str).str.lower() != "true"]
     df = df.dropna(subset=["latitude", "longitude"])
@@ -52,10 +60,17 @@ def load_crashes(path: Path, since: int | None) -> gpd.GeoDataFrame:
     df["date"] = pd.to_datetime(df["crash_timestamp_ct"], errors="coerce")
     if since:
         df = df[df["date"].dt.year >= since]
+    if until:
+        df = df[df["date"].dt.year <= until]
 
-    w = df["crash_sev_id"].map(SEVERITY_WEIGHT).fillna(0.5)
-    fatal = df["crash_fatal_fl"].astype(str).str.lower().eq("true") | (df["death_cnt"].fillna(0) > 0)
-    df["weight"] = np.where(fatal, SEVERITY_WEIGHT[4], w)
+    if weights == "cost":
+        # a missing cost counts as one baseline (no-injury) crash
+        df["weight"] = (df["est_comp_cost_crash_based"] / COST_UNIT).fillna(1.0)
+    else:
+        w = df["crash_sev_id"].map(SEVERITY_WEIGHT).fillna(0.5)
+        fatal = df["crash_fatal_fl"].astype(str).str.lower().eq("true") | (df["death_cnt"].fillna(0) > 0)
+        df["weight"] = np.where(fatal, SEVERITY_WEIGHT[4], w)
+    df["is_left"] = df["collsn_desc"].fillna("").str.contains(LEFT_TURN_RE)
 
     gdf = gpd.GeoDataFrame(
         df, geometry=gpd.points_from_xy(df["longitude"], df["latitude"]), crs="EPSG:4326"
@@ -70,16 +85,23 @@ def build_grid(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     cells = (
         pd.DataFrame({
             "ix": ix, "iy": iy, "weight": gdf["weight"].values,
+            "left_weight": np.where(gdf["is_left"], gdf["weight"], 0.0),
+            "left_n": gdf["is_left"].astype(int).values,
             "speed": gdf["crash_speed_limit"].where(gdf["crash_speed_limit"] > 0).values,
         })
         .groupby(["ix", "iy"])
-        .agg(crashes=("weight", "size"), weighted=("weight", "sum"), speed=("speed", "median"))
+        .agg(crashes=("weight", "size"), weighted=("weight", "sum"),
+             left_crashes=("left_n", "sum"), left_weighted=("left_weight", "sum"),
+             speed=("speed", "median"))
         .reset_index()
     )
     # Raw sums are heavy-tailed (a few downtown/highway cells dominate), so scale on log
     # before normalising or the heatmap would be one red dot on a blue map.
     scaled = np.log1p(cells["weighted"])
     cells["risk"] = (scaled / scaled.max()).round(4)
+    # Left-turn crash layer, scaled the same way (0 where no left-turn crash happened).
+    left_scaled = np.log1p(cells["left_weighted"])
+    cells["left_risk"] = (left_scaled / left_scaled.max()).round(4)
     cells["speed"] = cells["speed"].round(0)
 
     from shapely.geometry import box
@@ -92,16 +114,20 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--refresh", action="store_true", help="re-download the CSV")
     ap.add_argument("--since", type=int, help="only crashes from this year on")
+    ap.add_argument("--weights", choices=("cost", "severity"), default="severity",
+                    help="crash weighting: hand-set severity weights (default; best in backtest.py) "
+                         "or the city's cost estimates")
     args = ap.parse_args()
 
     if args.refresh or not CSV_PATH.exists():
         download(CSV_PATH)
-    crashes = load_crashes(CSV_PATH, args.since)
+    crashes = load_crashes(CSV_PATH, args.since, weights=args.weights)
     print(f"{len(crashes):,} geocoded crashes, "
           f"{crashes['date'].min():%Y-%m-%d} to {crashes['date'].max():%Y-%m-%d}")
 
     grid = build_grid(crashes).to_crs("EPSG:4326")
     grid["weighted"] = grid["weighted"].round(1)
+    grid["left_weighted"] = grid["left_weighted"].round(1)
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     gj = json.loads(grid.to_json(drop_id=True, na="null", to_wgs84=True))
     # foreign member so consumers can index cells without geometry math

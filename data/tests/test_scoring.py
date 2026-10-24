@@ -143,3 +143,39 @@ def test_crash_risk_standalone():
 def test_summary_has_no_zero_minute_lead():
     b = TestClient(app).post("/route", json=ROUTE_REQ).json()
     assert not b["comparison"]["summary"].startswith("+0")
+
+
+def _hot_left_cell():
+    """Centre of the cell with the highest left_risk."""
+    import json
+    from pyproj import Transformer
+    f = max(json.loads((Path(__file__).parent.parent / "risk.geojson").read_text())["features"],
+            key=lambda x: x["properties"]["left_risk"])
+    ring = f["geometry"]["coordinates"][0]
+    return (sum(p[0] for p in ring[:4]) / 4, sum(p[1] for p in ring[:4]) / 4)
+
+
+def test_left_turn_costs_more_where_left_crashes_happen():
+    lon, lat = _hot_left_cell()
+    line = [[lon - 0.0005, lat], [lon + 0.0005, lat]]
+    elon, elat = -98.05, 30.70
+    quiet = [[elon - 0.0005, elat], [elon + 0.0005, elat]]
+    ins = [{"sign": -2, "interval": [1, 1], "street_name": "Elm St", "distance": 50}]
+    hot, hz = scoring.score_route(line, "car", ins)
+    base, _ = scoring.score_route(line, "car")
+    cold, _ = scoring.score_route(quiet, "car", ins)
+    assert hot - base > cold - 0  # the turn adds more at the hot cell than on empty land
+    assert any(h["type"] == "left_turn_major" and "left-turn crashes" in h["description"] for h in hz)
+
+
+def test_pick_safest_respects_min_gain_and_budget():
+    from app import _pick_safest
+    fast = {"minutes": 10.0, "score": 100.0}
+    tiny_gain = {"minutes": 11.0, "score": 98.0}
+    big_gain = {"minutes": 11.0, "score": 70.0}
+    too_slow = {"minutes": 15.0, "score": 10.0}
+    rules = {"max_detour": 1.25, "min_gain": 0.05}
+    assert _pick_safest([fast, tiny_gain], fast, 1.0, rules) is fast      # not worth a detour
+    assert _pick_safest([fast, big_gain, too_slow], fast, 1.0, rules) is big_gain
+    assert _pick_safest([fast, big_gain], fast, 0.0, rules) is fast       # safety_weight 0
+    assert _pick_safest([fast, too_slow], fast, 1.0, {"max_detour": 1.6, "min_gain": 0.05}) is too_slow
