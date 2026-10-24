@@ -21,6 +21,15 @@ nonisolated enum Profile: String, CaseIterable, Identifiable, Codable {
         }
     }
 
+    /// Short label for the segmented control.
+    var shortName: String {
+        switch self {
+        case .teen: "Teen"
+        case .elderly: "Elderly"
+        case .sensitivePassenger: "Sensitive"
+        }
+    }
+
     /// SF Symbol shown next to the profile.
     var symbolName: String {
         switch self {
