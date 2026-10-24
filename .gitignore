@@ -1,0 +1,10 @@
+.DS_Store
+xcuserdata/
+DerivedData/
+.claude/settings.local.json
+*.osm.pbf
+graph-cache/
+data/raw/
+.venv/
+__pycache__/
+.env
