@@ -50,6 +50,16 @@ PROFILES = {
         crossing=1.5,       # any turn onto a fast road means crossing it
     ),
 }
+# App profiles (wire strings from the iOS app). All are drivers, so they start from "car".
+PROFILES["teen"] = {**PROFILES["car"],
+                    "crash": 11.0, "merge": 2.5, "left_major": 3.5, "roundabout": 1.0,
+                    "quick_after_exit": 3.5}           # inexperienced: merges, fast lefts
+PROFILES["elderly"] = {**PROFILES["car"],
+                       "crash": 11.0, "left": 2.5, "sharp_left": 3.5, "left_major": 4.0,
+                       "merge": 2.0, "roundabout": 1.5, "u_turn": 3.0}  # lefts and complexity
+PROFILES["sensitive_passenger"] = {**PROFILES["car"],
+                                   "crash": 12.0, "sharp_left": 3.5, "merge": 2.0,
+                                   "roundabout": 1.5, "u_turn": 3.0}    # smooth, fewer hard turns
 ALIASES = {"driving": "car", "auto": "car", "cycling": "bike", "bicycle": "bike",
            "walking": "foot", "pedestrian": "foot", "walk": "foot"}
 
@@ -114,7 +124,9 @@ def _coords(polyline, precision):
 def _norm_profile(profile: str) -> str:
     p = (profile or "car").lower()
     p = ALIASES.get(p, p)
-    return p if p in PROFILES else "car"
+    if p not in PROFILES:
+        raise ValueError(f"unknown profile {profile!r}; expected one of {sorted(PROFILES)}")
+    return p
 
 
 def _lookup(cells, cell_m, x, y):
@@ -212,3 +224,46 @@ def score_route(polyline, profile="car", instructions=None, precision=5):
 
     hazards.sort(key=lambda h: h["distance_m"])
     return round(float(score), 3), hazards
+
+
+# ---------- helpers for building the /route response the iOS app expects ----------
+
+RISK_HALF = 100.0  # raw score at which the 0..1 display risk reaches 0.5; tune after real trips
+
+
+def display_risk(score: float) -> float:
+    """Raw score (unbounded) -> 0..1 for the app's `risk` field."""
+    return round(score / (score + RISK_HALF), 3)
+
+
+def to_latlon(polyline, precision=5):
+    """Any accepted polyline input -> [[lat, lon], ...], the order the iOS app draws."""
+    return [[lat, lon] for lon, lat in _coords(polyline, precision)]
+
+
+_AVOID_LABELS = {
+    "left_turn_major": ("unprotected left turn", "unprotected left turns"),
+    "left_turn": ("left turn", "left turns"),
+    "merge": ("highway merge", "highway merges"),
+    "quick_after_exit": ("rushed turn after an exit", "rushed turns after an exit"),
+    "roundabout": ("roundabout", "roundabouts"),
+    "u_turn": ("U-turn", "U-turns"),
+    "crash_zone": ("high-crash zone", "high-crash zones"),
+    "crossing": ("crossing of a fast road", "crossings of fast roads"),
+}
+
+
+def hazards_avoided(fast_hazards, safe_hazards):
+    """Strings like "2 unprotected left turns" for hazards on the fastest route but not the safest."""
+    def count(hs):
+        c = {}
+        for h in hs:
+            c[h["type"]] = c.get(h["type"], 0) + 1
+        return c
+    fast, safe = count(fast_hazards), count(safe_hazards)
+    out = []
+    for kind, (one, many) in _AVOID_LABELS.items():
+        n = fast.get(kind, 0) - safe.get(kind, 0)
+        if n > 0:
+            out.append(f"{n} {one if n == 1 else many}")
+    return out

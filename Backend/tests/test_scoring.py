@@ -48,3 +48,27 @@ def test_risk_endpoint():
     gj = r.json()
     assert gj["type"] == "FeatureCollection"
     assert all(0 <= f["properties"]["risk"] <= 1 for f in gj["features"])
+
+
+def test_app_profiles_differ_and_unknown_rejected():
+    ins = [{"sign": -2, "interval": [1, 1], "street_name": "Congress Ave", "distance": 100}]
+    scores = {p: scoring.score_route(DOWNTOWN, p, ins)[0] for p in ("teen", "elderly", "sensitive_passenger")}
+    assert len(set(scores.values())) == 3
+    import pytest
+    with pytest.raises(ValueError):
+        scoring.score_route(DOWNTOWN, "nope")
+
+
+def test_route_response_helpers():
+    assert 0 < scoring.display_risk(67.4) < 1
+    assert scoring.to_latlon(DOWNTOWN)[0] == [30.2672, -97.7431]
+    fast = [{"type": "left_turn_major"}] * 2 + [{"type": "merge"}]
+    safe = [{"type": "merge"}]
+    assert scoring.hazards_avoided(fast, safe) == ["2 unprotected left turns"]
+
+
+def test_risk_min_filter():
+    c = TestClient(app)
+    full = len(c.get("/risk").json()["features"])
+    some = c.get("/risk?min_risk=0.5").json()["features"]
+    assert 0 < len(some) < full and all(f["properties"]["risk"] >= 0.5 for f in some)

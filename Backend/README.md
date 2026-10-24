@@ -11,9 +11,17 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 ```python
 from scoring import score_route
-risk, hazards = score_route(route["points"], "car", route["instructions"])  # "car" | "bike" | "foot"
-final = eta_minutes + w * risk   # w from the fastest<->safest slider
+# profile = the app's wire string: "teen" | "elderly" | "sensitive_passenger" (also "car"/"bike"/"foot")
+risk, hazards = score_route(route["points"], profile, route["instructions"])
+final = eta_minutes + w * risk   # use the raw score for ranking; w from the slider
+
+# building the app's /route response:
+from scoring import display_risk, to_latlon, hazards_avoided
+{"fastest": {"polyline": to_latlon(pts), "minutes": ..., "miles": ..., "risk": display_risk(risk)}, ...,
+ "hazards_avoided": hazards_avoided(fast_hazards, safe_hazards)}   # list of strings
 ```
+The app wants polylines as `[lat, lon]` and `risk` in 0..1; `to_latlon` and `display_risk` do both.
+Unknown profile names raise `ValueError` (no silent fallback). `GET /risk?min_risk=0.3` returns fewer cells.
 
 - `route["points"]`: encoded polyline string (precision 5) or GeoJSON `[lon, lat]` list/LineString. Request `instructions=true`.
 - `hazards`: `[{type, lat, lon, distance_m, points, description}]`, ready to pin on the map.
