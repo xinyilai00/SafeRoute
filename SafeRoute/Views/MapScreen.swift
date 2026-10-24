@@ -21,6 +21,13 @@ struct MapScreen: View {
             Map(position: $cameraPosition, scope: mapScope) {
                 UserAnnotation()
 
+                if model.showHeatmap {
+                    ForEach(model.heatmapCells) { cell in
+                        MapPolygon(coordinates: cell.ring)
+                            .foregroundStyle(HeatmapStyle.color(for: cell.risk).opacity(HeatmapStyle.opacity(for: cell.risk)))
+                    }
+                }
+
                 if let result = model.result {
                     MapPolyline(coordinates: result.response.fastest.coordinates)
                         .stroke(.gray, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
@@ -52,6 +59,15 @@ struct MapScreen: View {
                 bottomPanel
             }
 
+            if model.showHeatmap {
+                HeatmapLegend(isDemoData: model.isHeatmapDemoData)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .padding(.leading, 16)
+                    .padding(.top, searchBarReserve + 12)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
+
             SearchBar(userLocation: locationManager.coordinate) { item in
                 model.selectDestination(item)
                 frameCamera(around: item.location.coordinate)
@@ -79,10 +95,18 @@ struct MapScreen: View {
 
     private var bottomPanel: some View {
         VStack(alignment: .trailing, spacing: 12) {
-            MapUserLocationButton(scope: mapScope)
+            HStack(alignment: .bottom) {
+                HeatmapToggle(isOn: $model.showHeatmap, isLoading: model.isHeatmapLoading)
+                Spacer()
+                MapUserLocationButton(scope: mapScope)
+            }
 
             if model.destination != nil {
                 ProfilePicker(selection: $model.profile)
+
+                if model.result != nil {
+                    SafetySlider(value: $model.safetyWeight) { findRoute() }
+                }
 
                 if let result = model.result {
                     RouteSummaryCard(result: result, isReloading: model.isLoading)
