@@ -22,7 +22,7 @@ from pathlib import Path
 import numpy as np
 from pyproj import Transformer
 
-RISK_PATH = Path(__file__).parent / "data" / "risk.geojson"
+RISK_PATH = Path(__file__).parent / "risk.geojson"
 STEP_M = 20.0  # sampling distance along the route
 
 # Per-profile weights. Accepts GraphHopper profile names too (car/bike/foot, etc.).
@@ -133,33 +133,32 @@ def _lookup(cells, cell_m, x, y):
     return cells.get((int(np.floor(x / cell_m)), int(np.floor(y / cell_m))), (0.0, 0.0))
 
 
-def score_route(polyline, profile="car", instructions=None, precision=5):
-    """Score a candidate route. See module docstring. Returns (risk_score, hazards_list)."""
-    cells, cell_m, _ = _grid()
-    w = PROFILES[_norm_profile(profile)]
+def _project(polyline, precision=5):
+    """Polyline -> (UTM points, cumulative metres). Both empty-ish for < 2 points."""
     coords = _coords(polyline, precision)
-    hazards = []
     if len(coords) < 2:
-        return 0.0, hazards
-
+        return None, None
     xs, ys = _to_utm().transform([c[0] for c in coords], [c[1] for c in coords])
     xy = np.column_stack([xs, ys])
     seg = np.hypot(*np.diff(xy, axis=0).T)
-    cum = np.concatenate([[0.0], np.cumsum(seg)])
+    return xy, np.concatenate([[0.0], np.cumsum(seg)])
+
+
+def _crash_component(xy, cum, w):
+    """Walk the line, sample the grid every STEP_M, length-weighted. -> (points, events)."""
+    cells, cell_m, _ = _grid()
+    seg_len = np.diff(cum)
     total = cum[-1]
 
     def at(d):
-        """(x, y) in metres and index of the polyline vertex at distance d."""
         d = min(max(d, 0.0), total)
-        i = min(int(np.searchsorted(cum, d, side="right")) - 1, len(seg) - 1)
-        t = (d - cum[i]) / seg[i] if seg[i] > 0 else 0.0
+        i = min(int(np.searchsorted(cum, d, side="right")) - 1, len(seg_len) - 1)
+        t = (d - cum[i]) / seg_len[i] if seg_len[i] > 0 else 0.0
         return xy[i] + t * (xy[i + 1] - xy[i])
 
-    # ---- 1. crash risk: walk the line, sample the grid, length-weighted ----
-    crash = 0.0
+    crash, hazards, flagged = 0.0, [], set()
     n = max(int(np.ceil(total / STEP_M)), 1)
     step = total / n
-    flagged = set()
     for k in range(n):
         d = (k + 0.5) * step
         x, y = at(d)
@@ -169,10 +168,34 @@ def score_route(polyline, profile="car", instructions=None, precision=5):
         if risk >= HAZARD_CELL_RISK and cell not in flagged:
             flagged.add(cell)
             lon, lat = _to_utm().transform(x, y, direction="INVERSE")
-            hazards.append(dict(type="crash_zone", lat=lat, lon=lon, distance_m=round(d),
+            hazards.append(dict(type="high_crash_zone", lat=lat, lon=lon, distance_m=round(d),
                                 points=round(risk * w["crash"], 2),
                                 description=f"High crash-density area (risk {risk:.2f})"))
-    score = crash * w["crash"]
+    return crash * w["crash"], hazards
+
+
+def crash_risk(polyline, profile="car", precision=5):
+    """Crash-grid risk only (no turn penalties): (points, [high_crash_zone events]).
+
+    `polyline`: GeoJSON-order [[lng, lat], ...] (GraphHopper points_encoded=false), a GeoJSON
+    LineString dict, or an encoded polyline string. NOT [lat, lng].
+    """
+    w = PROFILES[_norm_profile(profile)]
+    xy, cum = _project(polyline, precision)
+    if xy is None:
+        return 0.0, []
+    score, hazards = _crash_component(xy, cum, w)
+    return round(float(score), 3), hazards
+
+
+def score_route(polyline, profile="car", instructions=None, precision=5):
+    """Crash risk + maneuver penalties. See module docstring. Returns (risk_score, hazards_list)."""
+    w = PROFILES[_norm_profile(profile)]
+    xy, cum = _project(polyline, precision)
+    if xy is None:
+        return 0.0, []
+    cells, cell_m, _ = _grid()
+    score, hazards = _crash_component(xy, cum, w)
 
     # ---- 2. turn-instruction penalties ----
     prev_exit = None
@@ -195,7 +218,7 @@ def score_route(polyline, profile="car", instructions=None, precision=5):
             elif pts:
                 kind, desc = "left_turn", "Left turn"
         elif sign in (KEEP_LEFT, KEEP_RIGHT):
-            pts, kind, desc = w["merge"], "merge", "Merge / fork"
+            pts, kind, desc = w["merge"], "highway_merge", "Merge / fork"
             if "exit" in text or "ramp" in text or "ramp" in street:
                 prev_exit = idx
                 desc = "Highway exit / ramp"
@@ -212,7 +235,7 @@ def score_route(polyline, profile="car", instructions=None, precision=5):
             if gap < QUICK_EXIT_M:
                 q = w["quick_after_exit"] * (1.0 - gap / QUICK_EXIT_M + 0.5)
                 pts += q
-                kind = kind or "quick_after_exit"
+                kind = kind or "quick_exit_turn"
                 desc = f"{desc or 'Turn'} only {gap:.0f} m after a highway exit"
 
         if pts > 0:
@@ -244,11 +267,11 @@ def to_latlon(polyline, precision=5):
 _AVOID_LABELS = {
     "left_turn_major": ("unprotected left turn", "unprotected left turns"),
     "left_turn": ("left turn", "left turns"),
-    "merge": ("highway merge", "highway merges"),
-    "quick_after_exit": ("rushed turn after an exit", "rushed turns after an exit"),
+    "highway_merge": ("highway merge", "highway merges"),
+    "quick_exit_turn": ("rushed turn after an exit", "rushed turns after an exit"),
     "roundabout": ("roundabout", "roundabouts"),
     "u_turn": ("U-turn", "U-turns"),
-    "crash_zone": ("high-crash zone", "high-crash zones"),
+    "high_crash_zone": ("high-crash zone", "high-crash zones"),
     "crossing": ("crossing of a fast road", "crossings of fast roads"),
 }
 

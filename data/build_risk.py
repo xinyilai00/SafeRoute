@@ -18,8 +18,8 @@ import numpy as np
 import pandas as pd
 
 HERE = Path(__file__).parent
-CSV_PATH = HERE / "data" / "raw" / "crashes.csv"
-OUT_PATH = HERE / "data" / "risk.geojson"
+CSV_PATH = HERE / "raw" / "crashes.csv"
+OUT_PATH = HERE / "risk.geojson"
 
 # "Austin Crash Report Data - Crash Level Records" (Vision Zero), Socrata id y2wy-tgr5
 CSV_URL = "https://data.austintexas.gov/resource/y2wy-tgr5.csv"

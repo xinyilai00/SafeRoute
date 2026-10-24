@@ -72,3 +72,69 @@ def test_risk_min_filter():
     full = len(c.get("/risk").json()["features"])
     some = c.get("/risk?min_risk=0.5").json()["features"]
     assert 0 < len(some) < full and all(f["properties"]["risk"] >= 0.5 for f in some)
+
+
+ROUTE_REQ = {"origin": {"lat": 30.2849, "lng": -97.7341},
+             "destination": {"lat": 30.2672, "lng": -97.7431}, "profile": "teen"}
+ROUTE_KEYS = {"geometry", "eta_minutes", "distance_km", "risk_score", "risk_events"}
+EVENT_TYPES = {"left_turn", "left_turn_major", "quick_exit_turn", "highway_merge", "high_crash_zone"}
+
+
+def _check_contract(b):
+    assert set(b) == {"fastest", "safest", "comparison"}
+    assert set(b["comparison"]) == {"minutes_added", "risk_reduction_pct", "summary"}
+    for k in ("fastest", "safest"):
+        assert set(b[k]) == ROUTE_KEYS
+        lat, lng = b[k]["geometry"][0]
+        assert 30 < lat < 31 and -98 < lng < -97          # [lat, lng] order
+        for e in b[k]["risk_events"]:
+            assert set(e) == {"type", "lat", "lng", "description"} and e["type"] in EVENT_TYPES
+
+
+def test_route_fake_matches_contract(monkeypatch):
+    monkeypatch.delenv("GH_URL", raising=False)
+    r = TestClient(app).post("/route", json=ROUTE_REQ)
+    assert r.status_code == 200 and r.headers["x-data-source"] == "fake"
+    b = r.json()
+    _check_contract(b)
+    assert b["safest"]["eta_minutes"] <= b["fastest"]["eta_minutes"] * 1.25 + 0.1
+    assert b["safest"]["risk_score"] <= b["fastest"]["risk_score"]
+
+
+def test_route_safety_weight_zero_is_fastest():
+    r = TestClient(app).post("/route", json={**ROUTE_REQ, "safety_weight": 0})
+    b = r.json()
+    assert b["safest"]["eta_minutes"] == b["fastest"]["eta_minutes"]
+    assert b["comparison"]["minutes_added"] == 0
+
+
+def test_route_accepts_lon_alias():
+    body = {**ROUTE_REQ, "origin": {"lat": 30.2849, "lon": -97.7341}}
+    assert TestClient(app).post("/route", json=body).status_code == 200
+
+
+def test_route_unknown_profile_422():
+    r = TestClient(app).post("/route", json={**ROUTE_REQ, "profile": "bogus"})
+    assert r.status_code == 422
+
+
+def test_route_graphhopper_parsing(monkeypatch):
+    import httpx
+    gh = {"paths": [
+        {"distance": 3000, "time": 300000, "instructions": [],
+         "points": {"coordinates": [[-97.7341, 30.2849], [-97.7431, 30.2672]]}},
+        {"distance": 3300, "time": 330000, "instructions": [],
+         "points": {"coordinates": [[-97.7341, 30.2849], [-97.75, 30.28], [-97.7431, 30.2672]]}}]}
+    monkeypatch.setenv("GH_URL", "http://gh.test")
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: httpx.Response(
+        200, json=gh, request=httpx.Request("POST", "http://gh.test/route")))
+    r = TestClient(app).post("/route", json=ROUTE_REQ)
+    assert r.status_code == 200 and r.headers["x-data-source"] == "graphhopper"
+    _check_contract(r.json())
+    assert r.json()["fastest"]["eta_minutes"] == 5.0
+
+
+def test_crash_risk_standalone():
+    pts, events = scoring.crash_risk(DOWNTOWN, "teen")
+    assert pts > 0 and events and all(e["type"] == "high_crash_zone" for e in events)
+    assert scoring.crash_risk(EMPTY, "teen") == (0.0, [])
