@@ -85,9 +85,9 @@ def health():
 #               detour must cut risk by more than it adds time (scaled by beta). beta 1 is an even
 #               trade; higher means the profile pays more time for safety.
 ROUTING_RULES = {
-    "teen": {"max_detour": 1.20, "min_gain": 0.05, "beta": 1.0},
-    "elderly": {"max_detour": 1.30, "min_gain": 0.03, "beta": 1.5},
-    "sensitive_passenger": {"max_detour": 1.25, "min_gain": 0.03, "beta": 1.5},
+    "teen": {"max_detour": 1.20, "min_gain": 0.05, "beta": 2.0},
+    "elderly": {"max_detour": 1.30, "min_gain": 0.03, "beta": 2.5},
+    "sensitive_passenger": {"max_detour": 1.25, "min_gain": 0.03, "beta": 2.5},
 }
 DEFAULT_RULES = {"max_detour": 1.20, "min_gain": 0.05, "beta": 1.0}
 KM_PER_MILE = 1.609344

@@ -52,7 +52,7 @@ CELL_RATIO_RANGE = (0.85, 1.30)    # new square count / previous square count
 SIMILARITY_MIN = 0.95              # Pearson correlation of risk over squares in both grids
 BACKTEST_FLOOR = 0.50              # share of later crashes in the top 10% of squares (currently ~0.58)
 BACKTEST_MAX_DROP = 0.03           # vs the last accepted run
-ROUTE_HELD_MAX = -2.0              # safest route must cut held-out crashes by at least this % (currently ~-4%)
+ROUTE_HELD_MAX = -2.0              # safest route must cut held-out crashes by at least this % (currently ~-5%)
 ROUTE_MAX_REGRESS = 2.0            # percentage points worse than the last accepted run
 CONCORDANCE_MIN = 0.55             # route-pair agreement between model score and later crashes (chance = 0.5)
 DRIFT_WARN_UPPER = 0.40            # warn if even the optimistic end of the forward capture is below this
