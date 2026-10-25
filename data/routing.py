@@ -50,7 +50,7 @@ class FakeProvider:
     name = "fake"
     AVG_MPS = 11.0  # ~25 mph
 
-    def routes(self, origin, destination):
+    def routes(self, origin, destination, blocked=None):
         o = [origin["lng"], origin["lat"]]
         d = [destination["lng"], destination["lat"]]
         dx, dy = d[0] - o[0], d[1] - o[1]
@@ -94,7 +94,8 @@ class GraphHopperProvider:
         self.url, self.profile = url.rstrip("/"), profile
         self.max_paths, self.timeout = max_paths, timeout
 
-    def routes(self, origin, destination):
+    def routes(self, origin, destination, blocked=None):
+        """`blocked`: GeoJSON geometry GraphHopper must not route through (road closures)."""
         body = {
             "points": [[origin["lng"], origin["lat"]], [destination["lng"], destination["lat"]]],
             "profile": self.profile,
@@ -105,6 +106,12 @@ class GraphHopperProvider:
             "ch.disable": True,  # alternatives don't work with CH
             "details": ["road_class"],  # per-stretch road type, used to discount highway crash counts
         }
+        if blocked:
+            body["custom_model"] = {
+                "priority": [{"if": "in_closure", "multiply_by": "0"}],
+                "areas": {"type": "FeatureCollection",
+                          "features": [{"id": "closure", "type": "Feature", "properties": {}, "geometry": blocked}]},
+            }
         r = httpx.post(f"{self.url}/route", json=body, timeout=self.timeout,
                        headers={"ngrok-skip-browser-warning": "true"})  # skips ngrok free-tier interstitial
         r.raise_for_status()

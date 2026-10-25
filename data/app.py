@@ -17,6 +17,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import AliasChoices, BaseModel, Field
 
+import live
 import routing
 from scoring import hazards_avoided, score_route, to_latlon
 
@@ -145,12 +146,21 @@ def route(req: RouteRequest):
     if abs(req.origin.lat - req.destination.lat) < 1e-4 and abs(req.origin.lng - req.destination.lng) < 1e-4:
         raise HTTPException(422, "origin and destination are the same place")
     provider = routing.get_provider()
+    o, d = req.origin.model_dump(), req.destination.model_dump()
+    blocked = live.closure_area() if live.enabled() and provider.name != "fake" else None
     try:
-        cands = provider.routes(req.origin.model_dump(), req.destination.model_dump())
+        try:
+            cands = provider.routes(o, d, blocked=blocked)
+        except Exception:
+            if not blocked:
+                raise
+            cands = provider.routes(o, d)  # e.g. an endpoint sits inside a closure: route normally
     except Exception as e:  # GraphHopper down / bad point
         raise HTTPException(502, f"routing engine error: {e}")
     if not cands:
         raise HTTPException(404, "no route found")
+    # live traffic ETAs + closure filtering (no-op without TOMTOM_API_KEY, and skipped for fake routes)
+    info = live.apply_live(cands) if provider.name != "fake" else {"live": False, "dropped": 0}
     try:
         for c in cands:
             c["score"], c["hazards"] = score_route(c["coords"], req.profile, c["instructions"],
@@ -177,6 +187,10 @@ def route(req: RouteRequest):
             n = int(zones.split()[0])
             parts.append(f"passes {n} fewer high-crash zone{'s' if n != 1 else ''}")
         summary = f"{lead}, " + (" and ".join(parts) if parts else "lower crash exposure")
+    if live.enabled() and provider.name != "fake" and live.hits_closure(safest["coords"]):
+        summary += " (warning: this route crosses a reported road closure)"
+    elif info["dropped"]:
+        summary += f" (avoids {info['dropped']} route{'s' if info['dropped'] != 1 else ''} through road closures)"
     body = {
         "fastest": _summary(fastest),
         "safest": _summary(safest),
@@ -184,4 +198,6 @@ def route(req: RouteRequest):
                        "risk_reduction_pct": round(100 * (f - s) / f) if f > 0 else 0,
                        "summary": summary},
     }
-    return JSONResponse(body, headers={"X-Data-Source": provider.name})
+    return JSONResponse(body, headers={"X-Data-Source": provider.name,
+                                       "X-Live-Traffic": "tomtom" if info["live"] else "off",
+                                       "X-Closures-Skipped": str(info["dropped"])})

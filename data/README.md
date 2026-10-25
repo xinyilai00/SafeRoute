@@ -38,6 +38,14 @@ ngrok http 8000
 - `score_route(coords, profile, instructions)` takes GraphHopper's `route["points"]["coordinates"]` and `route["instructions"]`.
   Per-profile weights are in `PROFILES` in `scoring.py`.
 
+## Live traffic (TomTom, optional)
+
+Set `TOMTOM_API_KEY` in the gitignored `.env`; without it everything below is skipped and `/route` uses GraphHopper's free-flow times. `live.py` does three things per `/route`:
+- **Closures:** current "road closed" incidents for the Austin box (cached 2 min) are sent to GraphHopper as a blocked area (custom model, priority 0), so it routes around closed streets. If an endpoint sits inside a closure it retries without blocking.
+- **Live ETAs:** each candidate is timed with TomTom Calculate Route (`traffic=true`, the candidate's own points as `supportingPoints`), in parallel, replacing GraphHopper's minutes. All live or none, never a mix. GraphHopper's free-flow times were often far too optimistic for non-highway routes (23 vs 33 min).
+- **Sanity checks:** candidates that still touch a closure, or whose live time is over 2.5x free-flow and 8+ min more, are dropped (unless that would drop all of them). If the chosen route still crosses a closure, the summary says so.
+- Response headers: `X-Live-Traffic: tomtom|off`, `X-Closures-Skipped: N`. Free tier is about 2,500 requests/day; one `/route` costs one TomTom call per candidate (up to 4) plus a cached incidents call.
+
 ## Method notes
 
 - Severity weights (build_risk.py): fatal 10, serious 6, non-incapacitating 2, possible 1, no injury 0.5. Cell value is log-scaled, then divided by the max, so the heatmap isn't one red dot. `--weights cost` uses the city's per-crash cost estimates instead; `backtest.py` shows it predicts later crashes slightly worse (rare fatals add noise), so severity is the default.

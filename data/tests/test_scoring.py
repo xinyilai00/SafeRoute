@@ -226,3 +226,97 @@ def test_curvy_route_costs_more_for_sensitive_passenger():
     teen_w, _ = scoring.score_route(wavy, "teen")
     assert sp_w > sp_s == 0 and teen_w == 0
     assert any(h["type"] == "winding_road" for h in hz)
+
+
+# ---------- live traffic (TomTom), all network calls patched ----------
+
+def test_support_points_cap_and_ends():
+    import live
+    coords = [[-97.7 + i * 1e-4, 30.2] for i in range(1000)]
+    pts = live._support_points(coords)
+    assert len(pts) <= live.MAX_SUPPORT_POINTS and pts[0] == coords[0] and pts[-1] == coords[-1]
+    short = coords[:10]
+    assert live._support_points(short) == short
+
+
+def test_apply_live_replaces_minutes_and_drops_closed(monkeypatch):
+    import live
+    from shapely.geometry import Point
+    from pyproj import Transformer
+    monkeypatch.setenv("TOMTOM_API_KEY", "x")
+    a = {"coords": [[-97.7431, 30.2672], [-97.7431, 30.2700]], "minutes": 5.0}
+    b = {"coords": [[-97.7300, 30.2672], [-97.7300, 30.2700]], "minutes": 6.0}
+    x, y = scoring._to_utm().transform(-97.7431, 30.2686)         # closure sits on route a
+    monkeypatch.setattr(live, "closures", lambda: [Point(x, y)])
+    monkeypatch.setattr(live, "live_minutes", lambda coords: 12.0 if coords is a["coords"] else 7.5)
+    cands = [a, b]
+    info = live.apply_live(cands)
+    assert info == {"live": True, "dropped": 1}
+    assert cands == [b] and b["minutes"] == 7.5 and b["free_minutes"] == 6.0
+
+
+def test_apply_live_keeps_all_closed_and_never_mixes_times(monkeypatch):
+    import live
+    from shapely.geometry import Point
+    monkeypatch.setenv("TOMTOM_API_KEY", "x")
+    a = {"coords": [[-97.7431, 30.2672], [-97.7431, 30.2700]], "minutes": 5.0}
+    b = {"coords": [[-97.7431, 30.2672], [-97.7431, 30.2700]], "minutes": 6.0}
+    x, y = scoring._to_utm().transform(-97.7431, 30.2686)
+    monkeypatch.setattr(live, "closures", lambda: [Point(x, y)])
+    monkeypatch.setattr(live, "live_minutes", lambda coords: None)   # TomTom down
+    cands = [a, b]
+    info = live.apply_live(cands)
+    assert info == {"live": False, "dropped": 0} and len(cands) == 2   # all closed: kept
+    assert a["minutes"] == 5.0 and b["minutes"] == 6.0                 # free-flow untouched
+
+
+def test_apply_live_is_noop_without_key(monkeypatch):
+    import live
+    monkeypatch.setenv("TOMTOM_API_KEY", "")
+    cands = [{"coords": [[-97.7, 30.2], [-97.71, 30.21]], "minutes": 5.0}]
+    assert live.apply_live(cands) == {"live": False, "dropped": 0} and cands[0]["minutes"] == 5.0
+
+
+def test_suspect_slow_routes_are_dropped(monkeypatch):
+    import live
+    monkeypatch.setenv("TOMTOM_API_KEY", "x")
+    good = {"coords": [[-97.74, 30.26], [-97.74, 30.27]], "minutes": 4.0}
+    blocked = {"coords": [[-97.73, 30.26], [-97.73, 30.27]], "minutes": 4.0}
+    monkeypatch.setattr(live, "closures", lambda: [])
+    monkeypatch.setattr(live, "live_minutes", lambda coords: 8.0 if coords is good["coords"] else 28.0)
+    cands = [good, blocked]
+    info = live.apply_live(cands)
+    assert cands == [good] and info["dropped"] == 1
+
+
+def test_closure_area_is_geojson_and_small(monkeypatch):
+    import live
+    from shapely.geometry import LineString
+    x1, y1 = scoring._to_utm().transform(-97.7431, 30.2672)
+    monkeypatch.setattr(live, "closures", lambda: [LineString([(x1, y1), (x1 + 120, y1 + 40)])])
+    live._closure_cache.pop("area", None)
+    area = live.closure_area()
+    assert area["type"] in ("Polygon", "MultiPolygon")
+    lng, lat = area["coordinates"][0][0][:2] if area["type"] == "Polygon" else area["coordinates"][0][0][0]
+    assert -98 < lng < -97 and 30 < lat < 31
+    live._closure_cache.pop("area", None)
+
+
+def test_route_retries_without_blocked_area(monkeypatch):
+    import live, routing
+    calls = []
+
+    class P:
+        name = "graphhopper"
+
+        def routes(self, o, d, blocked=None):
+            calls.append(bool(blocked))
+            if blocked:
+                raise RuntimeError("point inside blocked area")
+            return routing.FakeProvider().routes(o, d)
+    monkeypatch.setattr(routing, "get_provider", lambda: P())
+    monkeypatch.setattr(live, "enabled", lambda: True)
+    monkeypatch.setattr(live, "closure_area", lambda: {"type": "Polygon", "coordinates": []})
+    monkeypatch.setattr(live, "apply_live", lambda cands: {"live": False, "dropped": 0})
+    r = TestClient(app).post("/route", json=ROUTE_REQ)
+    assert r.status_code == 200 and calls == [True, False]
