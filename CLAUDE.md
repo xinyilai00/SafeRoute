@@ -69,7 +69,6 @@ Response:
 }
 ```
 Rules:
-- `fastest` is the conventional route, what a time-only navigator such as Google Maps would pick (fastest by live-traffic ETA); `safest` is ours, chosen because it carries less crash risk within the detour budget. The app shows them side by side with `comparison`. When they are the same route, the fastest is already the safest.
 - `geometry` is a list of `[lat, lng]` pairs. GraphHopper with `points_encoded=false` returns `[lng, lat]`, so the backend must flip each pair.
 - `risk_score` is penalty points; lower is safer.
 - `risk_events[].type` is one of: `left_turn`, `left_turn_major`, `quick_exit_turn`, `highway_merge`, `high_crash_zone`.
