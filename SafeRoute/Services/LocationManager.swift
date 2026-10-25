@@ -42,6 +42,21 @@ final class LocationManager: NSObject, CLLocationManagerDelegate {
         }
     }
 
+    /// Drive mode: best-for-navigation accuracy, automotive activity, every fix delivered.
+    func beginNavigationUpdates() {
+        start()
+        manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
+        manager.activityType = .automotiveNavigation
+        manager.distanceFilter = kCLDistanceFilterNone
+    }
+
+    /// Back to the lighter settings used while browsing the map.
+    func endNavigationUpdates() {
+        manager.desiredAccuracy = kCLLocationAccuracyBest
+        manager.activityType = .other
+        manager.distanceFilter = 10
+    }
+
     // MARK: - CLLocationManagerDelegate
 
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {

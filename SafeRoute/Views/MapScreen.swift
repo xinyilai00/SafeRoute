@@ -5,6 +5,7 @@
 
 import MapKit
 import SwiftUI
+import UIKit
 
 /// Full-screen map: user location, destination search, fastest/safest routes, and the summary card.
 struct MapScreen: View {
@@ -24,6 +25,10 @@ struct MapScreen: View {
     @AppStorage(Config.avoidHighwaysStorageKey) private var avoidHighways = false
     /// Links the stand-alone `MapCompass` in the button column to this map.
     @Namespace private var mapScope
+    /// Non-nil while drive mode is on.
+    @State private var drive: DriveModel?
+
+    private var isDriving: Bool { drive != nil }
 
     /// Height reserved at the top so camera fitting keeps routes out from under the search field.
     private let searchBarReserve: CGFloat = 64
@@ -34,13 +39,14 @@ struct MapScreen: View {
                 UserAnnotation()
 
                 if model.showsRiskHeatmap, let bands = model.riskBands {
-                    RiskHeatmapLayer(bands: bands)
+                    RiskHeatmapLayer(bands: bands, opacity: isDriving ? 0.35 : 1)
                 }
 
                 if let result = model.result {
-                    // The gray route and its markers are what the safe route avoids; nothing to show when identical.
+                    // The gray route and its markers are what the safe route avoids; nothing to show when identical,
+                    // and drive mode shows only the route being driven.
                     // White casings keep both lines legible on satellite and hybrid imagery.
-                    if !result.response.routesAreIdentical {
+                    if !result.response.routesAreIdentical && !isDriving {
                         MapPolyline(coordinates: result.response.fastest.coordinates)
                             .stroke(.white.opacity(0.85), style: StrokeStyle(lineWidth: 8, lineCap: .round, lineJoin: .round))
                         MapPolyline(coordinates: result.response.fastest.coordinates)
@@ -51,7 +57,7 @@ struct MapScreen: View {
                     MapPolyline(coordinates: result.response.safest.coordinates)
                         .stroke(.green, style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
 
-                    if !result.response.routesAreIdentical {
+                    if !result.response.routesAreIdentical && !isDriving {
                         ForEach(result.response.fastest.maneuverEvents) { event in
                             Annotation(event.description, coordinate: event.coordinate, anchor: .center) {
                                 RiskEventMarker(
@@ -74,7 +80,7 @@ struct MapScreen: View {
                         .annotationTitles(.hidden)
                     }
 
-                    if let labelAnchors {
+                    if let labelAnchors, !isDriving {
                         Annotation("", coordinate: labelAnchors.safe, anchor: .bottom) {
                             RouteLabel(
                                 text: result.response.routesAreIdentical
@@ -114,45 +120,29 @@ struct MapScreen: View {
             // Runs alongside MapKit's own gestures: a tap anywhere on the map puts the keyboard away.
             .simultaneousGesture(TapGesture().onEnded { isSearchFocused = false })
             .safeAreaInset(edge: .top, spacing: 0) {
-                Color.clear
-                    .frame(height: searchBarReserve)
-                    .allowsHitTesting(false)
+                if let drive {
+                    DriveBanner(banner: drive.banner, isMuted: drive.isMuted, onToggleMute: drive.toggleMute)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 8)
+                } else {
+                    Color.clear
+                        .frame(height: searchBarReserve)
+                        .allowsHitTesting(false)
+                }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                bottomPanel
-            }
-
-            // Top-right cluster under the search field; drawn before SearchBar so its dropdown covers it.
-            GlassEffectContainer(spacing: 12) {
-                VStack(spacing: 12) {
-                    ProfilePicker(selection: $model.profile)
-                    MapStyleMenu(selection: $mapStyleChoice)
-                    RouteOptionsMenu(avoidTolls: $avoidTolls, avoidHighways: $avoidHighways)
-                    // Shows itself only while the map is not facing north, like the system compass.
-                    MapCompass(scope: mapScope)
-                        .mapControlVisibility(.automatic)
-                        .frame(width: 44, height: 44)
+                if let drive {
+                    DriveBottomBar(stats: drive.stats, isSimulated: drive.isSimulated, onEnd: endDrive)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 8)
+                } else {
+                    bottomPanel
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .padding(.trailing, 16)
-            .padding(.top, searchBarReserve + 8)
 
-            SearchBar(
-                userLocation: locationManager.coordinate,
-                isFocused: $isSearchFocused,
-                onSelect: { item in
-                    model.selectDestination(item)
-                    frameCamera(around: item.location.coordinate)
-                    findRoute()
-                },
-                onClear: {
-                    model.clearDestination()
-                    recenterOnUser()
-                }
-            )
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
+            if !isDriving {
+                browsingOverlays
+            }
         }
         .mapScope(mapScope)
         .ignoresSafeArea(.keyboard)
@@ -171,9 +161,73 @@ struct MapScreen: View {
             selectedEventKey = nil
             labelAnchors = result.map { RouteLabelPlacement.anchors(for: $0.response) } ?? nil
             if let result {
-                fitCamera(to: result)
+                if let drive {
+                    drive.replaceRoute(result.response.safest)  // reroute while driving
+                } else {
+                    fitCamera(to: result)
+                }
             }
         }
+        .onChange(of: locationManager.location) { _, location in
+            if let drive, !drive.isSimulated, let location {
+                drive.update(with: location)
+            }
+        }
+        .onChange(of: drive?.camera) { _, camera in
+            if let camera {
+                follow(camera)
+            }
+        }
+        .onChange(of: drive?.rerouteRequests) { old, new in
+            if let new, new > (old ?? 0) {
+                findRoute()  // from the current location
+            }
+        }
+        .onChange(of: drive?.isFinished) { _, finished in
+            if finished == true {
+                endDrive()
+            }
+        }
+        // A light tap with every alert, spoken or muted.
+        .sensoryFeedback(.impact(weight: .light), trigger: drive?.alertCount) { old, new in
+            (new ?? 0) > (old ?? 0)
+        }
+    }
+
+    /// Search field and the button column: everything that is not needed while driving.
+    @ViewBuilder
+    private var browsingOverlays: some View {
+        // Top-right cluster under the search field; drawn before SearchBar so its dropdown covers it.
+        GlassEffectContainer(spacing: 12) {
+            VStack(spacing: 12) {
+                ProfilePicker(selection: $model.profile)
+                MapStyleMenu(selection: $mapStyleChoice)
+                RouteOptionsMenu(avoidTolls: $avoidTolls, avoidHighways: $avoidHighways)
+                // Shows itself only while the map is not facing north, like the system compass.
+                MapCompass(scope: mapScope)
+                    .mapControlVisibility(.automatic)
+                    .frame(width: 44, height: 44)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.trailing, 16)
+        .padding(.top, searchBarReserve + 8)
+
+        SearchBar(
+            userLocation: locationManager.coordinate,
+            isFocused: $isSearchFocused,
+            onSelect: { item in
+                model.selectDestination(item)
+                frameCamera(around: item.location.coordinate)
+                findRoute()
+            },
+            onClear: {
+                model.clearDestination()
+                recenterOnUser()
+            }
+        )
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
     }
 
     // MARK: - Bottom panel
@@ -192,7 +246,12 @@ struct MapScreen: View {
 
             if model.destination != nil {
                 if let result = model.result {
-                    RouteSummaryCard(result: result, isReloading: model.isLoading)
+                    RouteSummaryCard(
+                        result: result,
+                        isReloading: model.isLoading,
+                        onStart: { startDrive(simulated: false) },
+                        onSimulate: { startDrive(simulated: true) }
+                    )
                 } else if model.isLoading {
                     loadingCard
                 }
@@ -269,6 +328,49 @@ struct MapScreen: View {
 
     private func toggleSelection(_ key: String) {
         selectedEventKey = selectedEventKey == key ? nil : key
+    }
+
+    // MARK: - Drive mode
+
+    /// Drives the safe route of the current result. The screen stays awake until `endDrive()`; a real
+    /// drive also switches location updates to navigation accuracy, a simulated one moves on its own.
+    private func startDrive(simulated: Bool) {
+        guard let result = model.result, let destination = model.destination else { return }
+        isSearchFocused = false
+        selectedEventKey = nil
+        let drive = DriveModel(route: result.response.safest, destination: destination.location.coordinate, simulated: simulated)
+        if !simulated {
+            if let location = locationManager.location {
+                drive.update(with: location)
+            }
+            locationManager.beginNavigationUpdates()
+        }
+        self.drive = drive
+        UIApplication.shared.isIdleTimerDisabled = true
+        if let camera = drive.camera {
+            follow(camera)
+        }
+    }
+
+    private func endDrive() {
+        drive?.end()
+        drive = nil
+        locationManager.endNavigationUpdates()
+        UIApplication.shared.isIdleTimerDisabled = false
+        if let result = model.result {
+            fitCamera(to: result)
+        } else {
+            recenterOnUser()
+        }
+    }
+
+    /// Car-navigation framing: close in, tilted, turned to the direction of travel. The simulator ticks
+    /// twice a second, so its moves are linear and back to back; GPS fixes ease in.
+    private func follow(_ camera: DriveCamera) {
+        let animation: Animation = drive?.isSimulated == true ? .linear(duration: 0.5) : .easeInOut(duration: 0.6)
+        withAnimation(animation) {
+            cameraPosition = .camera(MapCamera(centerCoordinate: camera.center, distance: 450, heading: camera.heading, pitch: 60))
+        }
     }
 
     /// Animates back to the user. `.userLocation` only moves on a new fix, so a stationary phone
