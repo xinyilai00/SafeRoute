@@ -11,8 +11,14 @@ struct RouteSummaryCard: View {
     let result: RouteResult
     /// True while a new request (e.g. after a profile change) is replacing this result.
     var isReloading = false
+    /// Tapping Start begins drive mode along the safe route.
+    var onStart: () -> Void = {}
+    /// Holding Start begins a simulated demo drive instead.
+    var onSimulate: () -> Void = {}
 
     @State private var showsDetails = false
+    /// Set when the long press fires so the button's own action (on release) does not also start a real drive.
+    @State private var didLongPress = false
 
     private var response: RouteResponse { result.response }
     private var safest: Route { response.safest }
@@ -25,6 +31,7 @@ struct RouteSummaryCard: View {
             } else {
                 comparisonContent
             }
+            startButton
             details
         }
         .padding(16)
@@ -215,6 +222,34 @@ struct RouteSummaryCard: View {
                 chipGrid(hazards, tint: .orange)
             }
         }
+    }
+
+    // MARK: - Start
+
+    private var startButton: some View {
+        Button {
+            if didLongPress {
+                didLongPress = false
+            } else {
+                onStart()
+            }
+        } label: {
+            Label("Start", systemImage: "car.fill")
+                .font(.title3.weight(.bold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+        }
+        .buttonStyle(.borderedProminent)
+        .buttonBorderShape(.capsule)
+        .controlSize(.large)
+        .tint(.green)
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 0.6).onEnded { _ in
+                didLongPress = true
+                onSimulate()
+            }
+        )
+        .accessibilityHint("Starts drive mode along the safe route. Hold to run a simulated demo drive.")
     }
 
     // MARK: - Details
