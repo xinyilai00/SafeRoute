@@ -5,8 +5,9 @@
 
 import SwiftUI
 
-/// Liquid Glass card explaining, in plain words first, what the safe route avoids.
-/// Technical numbers live behind the "Details" disclosure.
+/// Compact Liquid Glass card: the safe route (with Start beside it) over the fastest route, one scrolling
+/// row of what the safe route avoids, and the backend's closure / avoid notes only when it sent any.
+/// Type stays large because elderly drivers are a target user.
 struct RouteSummaryCard: View {
     let result: RouteResult
     /// True while a new request (e.g. after a profile change) is replacing this result.
@@ -15,8 +16,10 @@ struct RouteSummaryCard: View {
     var onStart: () -> Void = {}
     /// Holding Start begins a simulated demo drive instead.
     var onSimulate: () -> Void = {}
+    /// True when the route does not start at the user's location: the button reads "Preview" and
+    /// a tap runs the simulated drive, since a real one could not be followed from here.
+    var isPreview = false
 
-    @State private var showsDetails = false
     /// Set when the long press fires so the button's own action (on release) does not also start a real drive.
     @State private var didLongPress = false
 
@@ -25,223 +28,192 @@ struct RouteSummaryCard: View {
     private var fastest: Route { response.fastest }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if response.routesAreIdentical {
-                sameRouteContent
-            } else {
-                comparisonContent
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    safeRouteRow
+                    if !response.routesAreIdentical {
+                        fastestRouteRow
+                    }
+                }
+                Spacer(minLength: 8)
+                startButton
             }
-            startButton
-            details
+
+            if response.routesAreIdentical {
+                headsUpRow
+            } else if !response.avoidedHazards.isEmpty {
+                chipRow(label: "Avoids", hazards: response.avoidedHazards, tint: .green)
+            }
+
+            notes
         }
         .padding(16)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
-    // MARK: - Two different routes
+    // MARK: - Route rows
 
-    @ViewBuilder
-    private var comparisonContent: some View {
+    /// Green dot, ETA, distance, and the risk saving (or "Also the safest route" when the routes match).
+    private var safeRouteRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Label("Safer Route", systemImage: "shield.checkered")
-                .font(.title3.weight(.bold))
-            Spacer(minLength: 8)
-            if isReloading {
-                ProgressView()
-                    .controlSize(.small)
-            }
-            if result.isLiveTraffic {
-                liveTrafficPill
-            }
-            addedTimeBadge
-        }
-
-        Text(response.avoidanceSentence ?? result.summaryWithoutNotes)
-            .font(.body)
-            .fixedSize(horizontal: false, vertical: true)
-
-        closureLine
-        avoidLines
-
-        VStack(spacing: 10) {
-            routeRow(name: "Safe route", color: .green, route: safest)
-            routeRow(name: "Fastest route", color: .gray, route: fastest)
-        }
-
-        if !response.avoidedHazards.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("What you avoid")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .textCase(.uppercase)
-                chips
-            }
-        }
-    }
-
-    private var addedTimeBadge: some View {
-        let added = displayedMinutes(safest) - displayedMinutes(fastest)
-        return Text(added >= 1 ? "+\(added) min" : "same time")
-            .font(.subheadline.weight(.bold))
-            .monospacedDigit()
-            .foregroundStyle(.white)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(.green, in: Capsule())
-            .accessibilityLabel(added >= 1 ? "\(added) minutes added" : "Same time")
-    }
-
-    private func routeRow(name: String, color: Color, route: Route) -> some View {
-        HStack(spacing: 10) {
-            Circle()
-                .fill(color)
-                .frame(width: 10, height: 10)
-            Text(name)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(color)
-            Spacer(minLength: 8)
-            Text("\(displayedMinutes(route)) min")
-                .font(.title2.weight(.bold))
-                .monospacedDigit()
-            VStack(alignment: .trailing, spacing: 3) {
-                RiskMeter(filled: riskDots(for: route), color: color)
-                Text(riskLabel(for: route))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            .frame(minWidth: 64, alignment: .trailing)
-        }
-        .accessibilityElement(children: .combine)
-    }
-
-    private var chips: some View {
-        chipGrid(response.avoidedHazards, tint: .green)
-    }
-
-    private func chipGrid(_ hazards: [HazardCount], tint: Color) -> some View {
-        LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 150), spacing: 8, alignment: .leading)],
-            alignment: .leading,
-            spacing: 8
-        ) {
-            ForEach(hazards) { hazard in
-                Label(hazard.text, systemImage: hazard.kind.symbolName)
-                    .font(.subheadline.weight(.medium))
-                    .lineLimit(2)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(tint.opacity(0.14), in: Capsule())
-            }
-        }
-    }
-
-    private var liveTrafficPill: some View {
-        Label("Live traffic", systemImage: "dot.radiowaves.left.and.right")
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.blue)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(.blue.opacity(0.14), in: Capsule())
-            .accessibilityLabel("ETAs use live traffic")
-    }
-
-    /// Closure information from the backend, when any: a warning if the route crosses one,
-    /// a reassurance when closed roads were routed around.
-    @ViewBuilder
-    private var closureLine: some View {
-        if let note = result.closureNote {
-            Label(note.text, systemImage: note.symbolName)
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(note == .crosses ? .orange : .green)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    /// What the backend avoided for the user (`X-Avoid-Applied`), and its warning when it could not
-    /// fully honour the choice, styled like the closure warning.
-    @ViewBuilder
-    private var avoidLines: some View {
-        if let avoided = result.avoidApplied.listText {
-            Label("Avoiding \(avoided)", systemImage: "slider.horizontal.3")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-        }
-        if let note = result.avoidNote {
-            Label(note, systemImage: "exclamationmark.triangle.fill")
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.orange)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    // MARK: - Same route
-
-    @ViewBuilder
-    private var sameRouteContent: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Label("Fastest is already the safest", systemImage: "checkmark.shield.fill")
-                .font(.title3.weight(.bold))
-                .foregroundStyle(.green)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 8)
-            if isReloading {
-                ProgressView()
-                    .controlSize(.small)
-            }
-            if result.isLiveTraffic {
-                liveTrafficPill
-            }
-        }
-
-        closureLine
-        avoidLines
-
-        HStack(spacing: 10) {
-            Circle()
-                .fill(.green)
-                .frame(width: 10, height: 10)
+            dot(.green, size: 12, lift: 2)
             Text("\(displayedMinutes(safest)) min")
-                .font(.title2.weight(.bold))
+                .font(.title.weight(.bold))
                 .monospacedDigit()
             Text(miles(safest))
+                .font(.body)
+                .foregroundStyle(.secondary)
+            Text(response.routesAreIdentical ? "Also the safest route" : riskText)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(response.routesAreIdentical || riskPercent >= 1 ? .green : .secondary)
+            if isReloading {
+                ProgressView()
+                    .controlSize(.small)
+            }
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "Safe route: \(displayedMinutes(safest)) minutes, \(miles(safest)), "
+            + (response.routesAreIdentical ? "also the safest route" : riskText)
+        )
+    }
+
+    /// Gray dot, ETA, distance, and how much time it saves, in neutral text (it is never the recommendation).
+    private var fastestRouteRow: some View {
+        let saved = displayedMinutes(safest) - displayedMinutes(fastest)
+        let savedText = saved >= 1 ? "\(saved) min faster" : "Same time"
+        return HStack(alignment: .firstTextBaseline, spacing: 8) {
+            dot(.gray, size: 10, lift: 0)
+            Text("\(displayedMinutes(fastest)) min")
+                .font(.title3.weight(.semibold))
+                .monospacedDigit()
+            Text(miles(fastest))
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Text(savedText)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "Fastest route: \(displayedMinutes(fastest)) minutes, \(miles(fastest)), "
+            + (saved >= 1 ? "\(saved) minutes faster" : "same time")
+        )
+    }
 
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Heads up on this route")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-            let hazards = safest.maneuverHazardCounts
-            if hazards.isEmpty {
-                Text("No risky merges or busy left turns on this route.")
-                    .font(.subheadline)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                chipGrid(hazards, tint: .orange)
+    /// Route dot aligned to the text baseline, lifted so it sits on the lower-case height of its row.
+    private func dot(_ color: Color, size: CGFloat, lift: CGFloat) -> some View {
+        Circle()
+            .fill(color)
+            .frame(width: size, height: size)
+            .alignmentGuide(.firstTextBaseline) { dimensions in dimensions[.bottom] + lift }
+            .accessibilityHidden(true)
+    }
+
+    private var riskPercent: Int { Int(response.comparison.riskReductionPct.rounded()) }
+
+    private var riskText: String {
+        riskPercent >= 1 ? "\(riskPercent)% less risk" : "Similar risk"
+    }
+
+    // MARK: - Chips
+
+    /// One scrolling row: a short lead-in word, then a capsule per hazard type. The row runs edge to edge
+    /// of the card so chips scroll out under its padding instead of being cut mid-card.
+    private func chipRow(label: String, hazards: [HazardCount], tint: Color) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                Text(label)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(hazards) { hazard in
+                    Label(hazard.text, systemImage: hazard.kind.symbolName)
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(1)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(tint.opacity(0.14), in: Capsule())
+                }
             }
+            .padding(.horizontal, 16)
         }
+        .padding(.horizontal, -16)
+    }
+
+    /// Identical routes: the maneuver hazards on the one route, or a reassurance when there are none.
+    @ViewBuilder
+    private var headsUpRow: some View {
+        let hazards = safest.maneuverHazardCounts
+        if hazards.isEmpty {
+            noteLine("No risky merges or busy left turns on this route", symbol: "checkmark.circle.fill", color: .green)
+        } else {
+            chipRow(label: "Heads up", hazards: hazards, tint: .orange)
+        }
+    }
+
+    // MARK: - Notes
+
+    /// Closure and avoid information from the backend, one line each and only when present,
+    /// plus a small tag when the mock data was used.
+    @ViewBuilder
+    private var notes: some View {
+        if let note = result.closureNote {
+            noteLine(note.text, symbol: note.symbolName, color: note == .crosses ? .orange : .green)
+        }
+        if let avoided = result.avoidApplied.listText {
+            noteLine("Avoiding \(avoided)", symbol: "slider.horizontal.3", color: .secondary)
+        }
+        if let note = result.avoidNote {
+            noteLine(note, symbol: "exclamationmark.triangle.fill", color: .orange)
+        }
+        if result.isDemoData {
+            Text("Demo data")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.orange)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(.orange.opacity(0.18), in: Capsule())
+                .accessibilityLabel("Demo data: the backend was not reachable")
+        }
+    }
+
+    private func noteLine(_ text: String, symbol: String, color: Color) -> some View {
+        Label(text, systemImage: symbol)
+            .font(.footnote.weight(.medium))
+            .foregroundStyle(color)
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     // MARK: - Start
 
+    /// Tall green button beside the route rows. Tap starts a real drive (or the simulation, for a preview);
+    /// a 0.6 s hold always starts the simulated demo.
     private var startButton: some View {
         Button {
             if didLongPress {
                 didLongPress = false
+            } else if isPreview {
+                onSimulate()
             } else {
                 onStart()
             }
         } label: {
-            Label("Start", systemImage: "car.fill")
-                .font(.title3.weight(.bold))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
+            VStack(spacing: 4) {
+                Image(systemName: isPreview ? "play.fill" : "car.fill")
+                    .font(.title2.weight(.bold))
+                Text(isPreview ? "Preview" : "Start")
+                    .font(.headline.weight(.bold))
+            }
+            .frame(width: 64, height: 54)
         }
         .buttonStyle(.borderedProminent)
-        .buttonBorderShape(.capsule)
-        .controlSize(.large)
+        .buttonBorderShape(.roundedRectangle(radius: 20))
         .tint(.green)
         .simultaneousGesture(
             LongPressGesture(minimumDuration: 0.6).onEnded { _ in
@@ -249,89 +221,20 @@ struct RouteSummaryCard: View {
                 onSimulate()
             }
         )
-        .accessibilityHint("Starts drive mode along the safe route. Hold to run a simulated demo drive.")
-    }
-
-    // MARK: - Details
-
-    private var details: some View {
-        DisclosureGroup(isExpanded: $showsDetails) {
-            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 4) {
-                GridRow {
-                    Text(response.routesAreIdentical ? "Distance" : "Safe route")
-                    Text(miles(safest))
-                }
-                if !response.routesAreIdentical {
-                    GridRow {
-                        Text("Fastest route")
-                        Text(miles(fastest))
-                    }
-                    GridRow {
-                        Text("Risk reduction")
-                        Text("\(Int(response.comparison.riskReductionPct.rounded()))%")
-                    }
-                }
-                if result.isDemoData {
-                    GridRow {
-                        Text("Source")
-                        Text("Demo data")
-                            .font(.caption2.weight(.semibold))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .foregroundStyle(.orange)
-                            .background(.orange.opacity(0.18), in: Capsule())
-                    }
-                }
-            }
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-            .padding(.top, 6)
-        } label: {
-            Text("Details")
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.secondary)
-        }
-        .tint(.secondary)
+        .accessibilityLabel(isPreview ? "Preview" : "Start")
+        .accessibilityHint(isPreview
+            ? "Plays a simulated drive along the safe route."
+            : "Starts drive mode along the safe route. Hold to run a simulated demo drive.")
     }
 
     // MARK: - Helpers
 
-    /// Whole minutes as displayed, so the badge always agrees with the two ETAs.
+    /// Whole minutes as displayed, so the time difference always agrees with the two ETAs.
     private func displayedMinutes(_ route: Route) -> Int {
         Int(route.etaMinutes.rounded())
     }
 
     private func miles(_ route: Route) -> String {
         String(format: "%.1f mi", route.distanceMiles)
-    }
-
-    /// 1...5 dots, relative to the riskier of the two routes (which always shows 5).
-    private func riskDots(for route: Route) -> Int {
-        let top = max(fastest.riskScore, safest.riskScore)
-        guard top > 0 else { return 1 }
-        return min(5, max(1, Int((route.riskScore / top * 5).rounded())))
-    }
-
-    private func riskLabel(for route: Route) -> String {
-        if fastest.riskScore == safest.riskScore { return "Same risk" }
-        let isSafer = route.riskScore == min(fastest.riskScore, safest.riskScore)
-        return isSafer ? "Lower risk" : "Higher risk"
-    }
-}
-
-/// Five dots, `filled` of them solid.
-private struct RiskMeter: View {
-    let filled: Int
-    let color: Color
-
-    var body: some View {
-        HStack(spacing: 3) {
-            ForEach(0..<5, id: \.self) { index in
-                Circle()
-                    .fill(index < filled ? color : color.opacity(0.25))
-                    .frame(width: 7, height: 7)
-            }
-        }
-        .accessibilityLabel("Risk \(filled) of 5")
     }
 }

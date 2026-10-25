@@ -7,13 +7,17 @@ import CoreLocation
 import MapKit
 import Observation
 
-/// State for `MapScreen`: chosen destination, profile, and the current route result.
+/// State for `MapScreen`: chosen start and destination, profile, and the current route result.
 @Observable
 final class MapScreenModel {
     var profile: Profile = .teen
+    /// Start of the route when it is not the user's location.
+    private(set) var origin: MKMapItem?
     private(set) var destination: MKMapItem?
     private(set) var result: RouteResult?
     private(set) var isLoading = false
+    /// True when the start or destination is outside the backend's Austin pilot area; no route is requested.
+    private(set) var isOutsideCoverage = false
 
     /// Crash-risk heatmap, fetched once per launch and cached here already banded and merged.
     private(set) var riskGrid: RiskGridState = .loading
@@ -36,6 +40,9 @@ final class MapScreenModel {
         return true
     }
 
+    /// True while the route starts where the user is (the default).
+    var startsAtUserLocation: Bool { origin == nil }
+
     @ObservationIgnored private let routeService = RouteService()
     @ObservationIgnored private let riskService = RiskService()
     @ObservationIgnored private var routeTask: Task<Void, Never>?
@@ -54,30 +61,62 @@ final class MapScreenModel {
         }
     }
 
-    /// Picking a destination clears any routes for the previous one.
+    /// Picking a destination clears any routes for the previous one. The start is kept.
     func selectDestination(_ item: MKMapItem) {
         routeTask?.cancel()
         destination = item
         result = nil
         isLoading = false
+        isOutsideCoverage = false
     }
 
-    /// Back to the neutral state: no destination, routes, markers or card.
+    /// Picks where the route starts; nil means the user's location. The old route stays up until the new one arrives.
+    func selectOrigin(_ item: MKMapItem?) {
+        origin = item
+    }
+
+    /// Swaps start and destination. When the start is the user's location, the destination becomes a
+    /// "My Location" place at the user's position as of now; without a position the swap is skipped.
+    func swapEndpoints(userLocation: CLLocation?) {
+        guard let destination else { return }
+        let newDestination: MKMapItem
+        if let origin {
+            newDestination = origin
+        } else {
+            guard let userLocation else { return }
+            newDestination = MKMapItem(location: userLocation, address: nil)
+            newDestination.name = "My Location"
+        }
+        origin = destination
+        self.destination = newDestination
+    }
+
+    /// Back to the neutral state: no destination, routes, markers or card, and the start is the user again.
     func clearDestination() {
         routeTask?.cancel()
+        origin = nil
         destination = nil
         result = nil
         isLoading = false
+        isOutsideCoverage = false
     }
 
-    /// Requests fastest + safest routes for the current destination, profile and route options.
-    /// `origin` is the user's location; when unavailable the UT Austin fallback keeps the demo working.
-    func findRoute(from origin: CLLocationCoordinate2D?, avoiding avoid: AvoidOptions = AvoidOptions()) {
+    /// Requests fastest + safest routes for the current start, destination, profile and route options.
+    /// `userLocation` is used when the start is the user; when unavailable the UT Austin fallback keeps the demo working.
+    /// Points outside the pilot area get the coverage message instead of a request (the backend would answer 422).
+    func findRoute(from userLocation: CLLocationCoordinate2D?, avoiding avoid: AvoidOptions = AvoidOptions()) {
         guard let destination else { return }
         routeTask?.cancel()
 
-        let originCoordinate = origin ?? Config.fallbackOrigin
+        let originCoordinate = origin?.location.coordinate ?? userLocation ?? Config.fallbackOrigin
         let destinationCoordinate = destination.location.coordinate
+        guard Config.isInPilotArea(originCoordinate), Config.isInPilotArea(destinationCoordinate) else {
+            result = nil
+            isLoading = false
+            isOutsideCoverage = true
+            return
+        }
+        isOutsideCoverage = false
         let profile = profile
         isLoading = true
 

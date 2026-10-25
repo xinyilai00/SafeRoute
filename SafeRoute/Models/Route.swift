@@ -79,6 +79,16 @@ nonisolated enum RiskEventType: String, CaseIterable {
         }
     }
 
+    /// Higher is more serious; a merged marker shows its most serious hazard.
+    var severityRank: Int {
+        switch self {
+        case .leftTurnMajor, .highwayMerge: 3
+        case .leftTurn, .quickExitTurn: 2
+        case .highCrashZone: 1
+        case .unknown: 0
+        }
+    }
+
     var symbolName: String {
         switch self {
         case .leftTurn, .leftTurnMajor: "arrow.turn.up.left"

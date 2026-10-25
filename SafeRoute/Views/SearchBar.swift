@@ -6,15 +6,34 @@
 import MapKit
 import SwiftUI
 
-/// Destination search field with live suggestions, Apple Maps style.
+/// Destination search with live suggestions, Apple Maps style. Once a route is showing, the field becomes
+/// a two-line From / To panel with a swap button; tapping either line opens the same search for that end.
 ///
 /// Focus is owned by the parent so tapping the map can dismiss the keyboard. The dropdown stays
 /// open after the keyboard goes away (map tap or list scroll) until Cancel or a selection.
 struct SearchBar: View {
+    /// Which end of the route a search edits.
+    enum Field {
+        case origin, destination
+    }
+
+    /// What the From / To panel shows.
+    struct Endpoints: Equatable {
+        /// Nil means the user's location.
+        var originName: String?
+        var destinationName: String
+        /// False when swapping would need the user's position and there is none yet.
+        var canSwap: Bool
+    }
+
     /// Used to bias suggestions toward the user; falls back to Austin.
     var userLocation: CLLocationCoordinate2D?
+    /// Non-nil while a route is showing (or loading): the panel replaces the single field.
+    var endpoints: Endpoints?
     var isFocused: FocusState<Bool>.Binding
-    var onSelect: (MKMapItem) -> Void
+    /// A place was picked for `field`. A nil item means "My Location" (origin only).
+    var onSelect: (Field, MKMapItem?) -> Void
+    var onSwap: () -> Void
     /// The clear (x) button was tapped: the parent returns the map to its neutral state.
     var onClear: () -> Void
 
@@ -22,6 +41,8 @@ struct SearchBar: View {
     @State private var search = SearchService()
     /// True from the moment the field gains focus until Cancel or a selection.
     @State private var isActive = false
+    /// Which end the open search is for. Always the destination in the neutral state.
+    @State private var editing: Field = .destination
 
     private var showsNoResults: Bool {
         !query.isEmpty && search.hasSearched && search.suggestions.isEmpty && !search.isSearching
@@ -29,18 +50,22 @@ struct SearchBar: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            HStack(spacing: 12) {
-                field
-                if isActive {
-                    Button("Cancel") {
-                        cancel()
+            if let endpoints, !isActive {
+                routePanel(endpoints)
+            } else {
+                HStack(spacing: 12) {
+                    field
+                    if isActive {
+                        Button("Cancel") {
+                            cancel()
+                        }
+                        .font(.body)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
                     }
-                    .font(.body)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
             if isActive {
-                if !search.suggestions.isEmpty {
+                if editing == .origin || !search.suggestions.isEmpty {
                     suggestionList
                 } else if showsNoResults {
                     Text("No places found")
@@ -64,6 +89,13 @@ struct SearchBar: View {
             guard isFocused.wrappedValue else { return }
             search.search(newValue, near: userLocation)
         }
+        .onChange(of: endpoints) { _, endpoints in
+            // Back to the neutral state: the single field starts empty again.
+            if endpoints == nil {
+                editing = .destination
+                query = ""
+            }
+        }
         .onSubmit {
             if let first = search.suggestions.first {
                 select(first)
@@ -71,11 +103,13 @@ struct SearchBar: View {
         }
     }
 
+    // MARK: - Single field
+
     private var field: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.primary)
-            TextField("Where to?", text: $query)
+            TextField(editing == .origin ? "Start from…" : "Where to?", text: $query)
                 .focused(isFocused)
                 .textInputAutocapitalization(.words)
                 .autocorrectionDisabled()
@@ -87,7 +121,9 @@ struct SearchBar: View {
                 Button {
                     query = ""
                     search.clear()
-                    onClear()
+                    if endpoints == nil {
+                        onClear()
+                    }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.secondary)
@@ -101,9 +137,90 @@ struct SearchBar: View {
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
+    // MARK: - From / To panel
+
+    private func routePanel(_ endpoints: Endpoints) -> some View {
+        HStack(spacing: 4) {
+            VStack(spacing: 0) {
+                endpointRow(
+                    .origin,
+                    label: "From",
+                    name: endpoints.originName ?? "My Location",
+                    symbol: endpoints.originName == nil ? "location.fill" : "mappin.circle.fill",
+                    tint: endpoints.originName == nil ? .blue : .red
+                )
+                Divider()
+                    .padding(.leading, 30)
+                HStack(spacing: 8) {
+                    endpointRow(.destination, label: "To", name: endpoints.destinationName, symbol: "mappin.circle.fill", tint: .red)
+                    Button(action: onClear) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear route")
+                }
+            }
+            Button(action: onSwap) {
+                Image(systemName: "arrow.up.arrow.down")
+                    .font(.body.weight(.semibold))
+                    .frame(width: 40, height: 40)
+            }
+            .buttonStyle(.plain)
+            .disabled(!endpoints.canSwap)
+            .accessibilityLabel("Swap start and destination")
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 6)
+        .padding(.vertical, 2)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func endpointRow(_ field: Field, label: String, name: String, symbol: String, tint: Color) -> some View {
+        Button {
+            beginEditing(field)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: symbol)
+                    .foregroundStyle(tint)
+                    .frame(width: 20)
+                Text(label)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 40, alignment: .leading)
+                Text(name)
+                    .font(.body)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 11)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(label): \(name)")
+        .accessibilityHint("Changes it")
+    }
+
+    // MARK: - Suggestions
+
     private var suggestionList: some View {
         ScrollView {
             VStack(spacing: 0) {
+                if editing == .origin {
+                    Button {
+                        isFocused.wrappedValue = false
+                        isActive = false
+                        search.clear()
+                        onSelect(.origin, nil)
+                    } label: {
+                        row(symbol: "location.fill", tint: .blue, title: AttributedString("My Location"), subtitle: nil)
+                    }
+                    .buttonStyle(.plain)
+                    if !search.suggestions.isEmpty {
+                        Divider().padding(.leading, 46)
+                    }
+                }
                 ForEach(Array(search.suggestions.enumerated()), id: \.element) { index, completion in
                     Button {
                         select(completion)
@@ -125,18 +242,27 @@ struct SearchBar: View {
 
     private func row(_ completion: MKLocalSearchCompletion) -> some View {
         let symbol = SuggestionSymbol.symbol(for: completion)
-        return HStack(spacing: 12) {
-            Image(systemName: symbol.name)
+        return row(
+            symbol: symbol.name,
+            tint: symbol.isPin ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary),
+            title: highlighted(completion.title, ranges: completion.titleHighlightRanges),
+            subtitle: completion.subtitle.isEmpty ? nil : highlighted(completion.subtitle, ranges: completion.subtitleHighlightRanges)
+        )
+    }
+
+    private func row(symbol: String, tint: some ShapeStyle, title: AttributedString, subtitle: AttributedString?) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol)
                 .font(.title3)
-                .foregroundStyle(symbol.isPin ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                .foregroundStyle(tint)
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 2) {
-                Text(highlighted(completion.title, ranges: completion.titleHighlightRanges))
+                Text(title)
                     .font(.body)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                if !completion.subtitle.isEmpty {
-                    Text(highlighted(completion.subtitle, ranges: completion.subtitleHighlightRanges))
+                if let subtitle {
+                    Text(subtitle)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -161,18 +287,30 @@ struct SearchBar: View {
         return attributed
     }
 
+    // MARK: - Actions
+
+    /// Opens the search for one end of the route, starting from an empty field.
+    private func beginEditing(_ field: Field) {
+        editing = field
+        query = ""
+        search.clear()
+        isActive = true
+        isFocused.wrappedValue = true
+    }
+
     private func select(_ completion: MKLocalSearchCompletion) {
         isFocused.wrappedValue = false
         isActive = false
         query = completion.title
+        let field = editing
         Task {
             guard let item = await search.resolve(completion) else { return }
             search.clear()
-            onSelect(item)
+            onSelect(field, item)
         }
     }
 
-    /// Closes the search without picking anything; the typed text is kept.
+    /// Closes the search without picking anything; in the neutral state the typed text is kept.
     private func cancel() {
         isFocused.wrappedValue = false
         isActive = false

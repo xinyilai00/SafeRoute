@@ -13,8 +13,10 @@ struct MapScreen: View {
     @State private var model = MapScreenModel()
     @State private var cameraPosition: MapCameraPosition = .userLocation(fallback: .region(Config.austinRegion))
     @FocusState private var isSearchFocused: Bool
-    /// Marker whose description bubble is open: "fastest-<event id>" or "safest-<event id>".
-    @State private var selectedEventKey: String?
+    /// Hazard markers in the route overview; recomputed when the result changes.
+    @State private var hazardClusters: [HazardCluster] = []
+    /// Marker whose bubble is open.
+    @State private var selectedClusterID: HazardCluster.ID?
     /// Where the "Safe · 24 min" / "Fastest · 23 min" capsules sit; recomputed when the result changes.
     @State private var labelAnchors: RouteLabelAnchors?
     /// Remembered between launches; mirrored into `model.profile`.
@@ -30,8 +32,9 @@ struct MapScreen: View {
 
     private var isDriving: Bool { drive != nil }
 
-    /// Height reserved at the top so camera fitting keeps routes out from under the search field.
-    private let searchBarReserve: CGFloat = 64
+    /// Height reserved at the top so camera fitting keeps routes out from under the search field,
+    /// which grows into the two-line From / To panel once a destination is chosen.
+    private var searchBarReserve: CGFloat { model.destination == nil ? 64 : 104 }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -57,27 +60,17 @@ struct MapScreen: View {
                     MapPolyline(coordinates: result.response.safest.coordinates)
                         .stroke(.green, style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
 
-                    if !result.response.routesAreIdentical && !isDriving {
-                        ForEach(result.response.fastest.maneuverEvents) { event in
-                            Annotation(event.description, coordinate: event.coordinate, anchor: .center) {
-                                RiskEventMarker(
-                                    event: event,
-                                    isMuted: true,
-                                    isSelected: selectedEventKey == "fastest-\(event.id)"
-                                ) { toggleSelection("fastest-\(event.id)") }
+                    // Overview markers: the hazards the safe route avoids (or, for identical routes, the route's
+                    // own), merged when they would overlap. The safe line stays clean; drive mode calls out its hazards.
+                    if !isDriving {
+                        ForEach(hazardClusters) { cluster in
+                            Annotation("", coordinate: cluster.coordinate, anchor: .center) {
+                                HazardClusterMarker(cluster: cluster, isSelected: selectedClusterID == cluster.id) {
+                                    toggleSelection(cluster.id)
+                                }
                             }
                             .annotationTitles(.hidden)
                         }
-                    }
-                    ForEach(result.response.safest.maneuverEvents) { event in
-                        Annotation(event.description, coordinate: event.coordinate, anchor: .center) {
-                            RiskEventMarker(
-                                event: event,
-                                isMuted: false,
-                                isSelected: selectedEventKey == "safest-\(event.id)"
-                            ) { toggleSelection("safest-\(event.id)") }
-                        }
-                        .annotationTitles(.hidden)
                     }
 
                     if let labelAnchors, !isDriving {
@@ -102,6 +95,10 @@ struct MapScreen: View {
                     }
                 }
 
+                if let origin = model.origin {
+                    Marker(origin.name ?? "Start", systemImage: "flag.fill", coordinate: origin.location.coordinate)
+                        .tint(.green)
+                }
                 if let destination = model.destination {
                     Marker(
                         destination.name ?? "Destination",
@@ -158,8 +155,9 @@ struct MapScreen: View {
         .onChange(of: avoidTolls) { _, _ in refetchIfRouting() }
         .onChange(of: avoidHighways) { _, _ in refetchIfRouting() }
         .onChange(of: model.result) { _, result in
-            selectedEventKey = nil
+            selectedClusterID = nil
             labelAnchors = result.map { RouteLabelPlacement.anchors(for: $0.response) } ?? nil
+            hazardClusters = result.map { HazardClustering.overviewClusters(for: $0.response) } ?? []
             if let result {
                 if let drive {
                     drive.replaceRoute(result.response.safest)  // reroute while driving
@@ -215,10 +213,27 @@ struct MapScreen: View {
 
         SearchBar(
             userLocation: locationManager.coordinate,
+            endpoints: model.destination.map { destination in
+                SearchBar.Endpoints(
+                    originName: model.origin?.name,
+                    destinationName: destination.name ?? "Destination",
+                    canSwap: model.origin != nil || locationManager.location != nil
+                )
+            },
             isFocused: $isSearchFocused,
-            onSelect: { item in
-                model.selectDestination(item)
-                frameCamera(around: item.location.coordinate)
+            onSelect: { field, item in
+                switch field {
+                case .destination:
+                    guard let item else { return }
+                    model.selectDestination(item)
+                    frameCamera(around: item.location.coordinate)
+                case .origin:
+                    model.selectOrigin(item)
+                }
+                findRoute()
+            },
+            onSwap: {
+                model.swapEndpoints(userLocation: locationManager.location)
                 findRoute()
             },
             onClear: {
@@ -250,8 +265,11 @@ struct MapScreen: View {
                         result: result,
                         isReloading: model.isLoading,
                         onStart: { startDrive(simulated: false) },
-                        onSimulate: { startDrive(simulated: true) }
+                        onSimulate: { startDrive(simulated: true) },
+                        isPreview: !model.startsAtUserLocation
                     )
+                } else if model.isOutsideCoverage {
+                    coverageCard
                 } else if model.isLoading {
                     loadingCard
                 }
@@ -284,6 +302,26 @@ struct MapScreen: View {
         }
         .padding(16)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+
+    /// Shown instead of a route when the start or destination is outside the backend's pilot area.
+    private var coverageCard: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "map.fill")
+                .font(.title2)
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("SafeRoute covers Austin for now")
+                    .font(.headline)
+                Text("Choose a start and destination in the Austin area.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(16)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .accessibilityElement(children: .combine)
     }
 
     private var heatmapToggle: some View {
@@ -326,8 +364,8 @@ struct MapScreen: View {
         }
     }
 
-    private func toggleSelection(_ key: String) {
-        selectedEventKey = selectedEventKey == key ? nil : key
+    private func toggleSelection(_ id: HazardCluster.ID) {
+        selectedClusterID = selectedClusterID == id ? nil : id
     }
 
     // MARK: - Drive mode
@@ -337,7 +375,7 @@ struct MapScreen: View {
     private func startDrive(simulated: Bool) {
         guard let result = model.result, let destination = model.destination else { return }
         isSearchFocused = false
-        selectedEventKey = nil
+        selectedClusterID = nil
         let drive = DriveModel(route: result.response.safest, destination: destination.location.coordinate, simulated: simulated)
         if !simulated {
             if let location = locationManager.location {
@@ -414,54 +452,6 @@ struct MapScreen: View {
         let padded = rect.insetBy(dx: -rect.width * 0.2, dy: -rect.height * 0.2)
         withAnimation(.easeInOut(duration: 0.8)) {
             cameraPosition = .rect(padded)
-        }
-    }
-}
-
-/// Small circular marker for one maneuver hazard. Muted (small, gray) for the fastest route,
-/// colored for the safest. Tapping toggles a bubble with the event's description.
-private struct RiskEventMarker: View {
-    let event: RiskEvent
-    var isMuted: Bool
-    var isSelected: Bool
-    var onTap: () -> Void
-
-    private var size: CGFloat { isMuted ? 16 : 22 }
-
-    var body: some View {
-        Button(action: onTap) {
-            Image(systemName: event.kind.symbolName)
-                .font(.system(size: isMuted ? 8 : 11, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: size, height: size)
-                .background(color, in: Circle())
-                .overlay(Circle().strokeBorder(.white, lineWidth: isMuted ? 1 : 1.5))
-                .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
-        }
-        .buttonStyle(.plain)
-        .overlay(alignment: .bottom) {
-            if isSelected {
-                Text(event.description)
-                    .font(.caption)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .frame(width: 240)
-                    .padding(.bottom, size + 6)
-                    .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .bottom)))
-            }
-        }
-        .animation(.snappy(duration: 0.2), value: isSelected)
-        .accessibilityLabel(event.description)
-    }
-
-    private var color: Color {
-        if isMuted { return .gray }
-        switch event.kind {
-        case .leftTurn, .quickExitTurn: return .orange
-        case .leftTurnMajor, .highwayMerge, .highCrashZone: return .red
-        case .unknown: return .gray
         }
     }
 }

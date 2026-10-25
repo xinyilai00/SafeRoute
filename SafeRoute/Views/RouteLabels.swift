@@ -14,10 +14,10 @@ struct RouteLabel: View {
 
     var body: some View {
         Text(text)
-            .font(.caption.weight(.bold))
+            .font(.caption2.weight(.bold))
             .foregroundStyle(.white)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
             .background(color, in: Capsule())
             .overlay(Capsule().strokeBorder(.white.opacity(0.9), lineWidth: 1.5))
             .shadow(color: .black.opacity(0.2), radius: 2, y: 1)

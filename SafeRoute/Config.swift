@@ -36,6 +36,15 @@ nonisolated enum Config {
     /// Origin used when the user's location is unavailable: UT Austin, where the mock routes start.
     static let fallbackOrigin = CLLocationCoordinate2D(latitude: 30.2849, longitude: -97.7341)
 
+    /// The backend's pilot area (`BOUNDS` in data/app.py). It answers 422 for points outside it, so the
+    /// app checks first and shows a coverage message instead of a route.
+    static let pilotLatitudes = 29.95...30.75
+    static let pilotLongitudes = -98.1 ... -97.3
+
+    static func isInPilotArea(_ coordinate: CLLocationCoordinate2D) -> Bool {
+        pilotLatitudes.contains(coordinate.latitude) && pilotLongitudes.contains(coordinate.longitude)
+    }
+
     /// Pilot area: downtown Austin, TX. Map fallback before location is available, and search bias.
     static let austinCenter = CLLocationCoordinate2D(latitude: 30.2672, longitude: -97.7431)
     static let austinRegion = MKCoordinateRegion(
