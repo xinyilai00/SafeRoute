@@ -40,11 +40,13 @@ Request:
   "origin": {"lat": 30.2849, "lng": -97.7341},
   "destination": {"lat": 30.2672, "lng": -97.7431},
   "profile": "teen",
-  "safety_weight": 1.0
+  "safety_weight": 1.0,
+  "avoid": ["tolls", "highways"]
 }
 ```
 - `profile`: `"teen"` | `"elderly"` | `"sensitive_passenger"`
 - `safety_weight`: 0 = fastest, 1 = safest. Optional, default 1.0.
+- `avoid`: optional list, any of `"tolls"` and `"highways"` (motorway and trunk roads, ramps included). Default `[]`: both are allowed, because they often save real time. It is a strong preference, not a ban: GraphHopper makes those roads about 100x less attractive, so a destination that is only reachable that way still gets a route. Unknown values are rejected with a 422. The response shape does not change; if the choice could not be honored, `comparison.summary` says so, e.g. `"(couldn't fully avoid tolls (12% of the route))"`.
 
 Response:
 ```json

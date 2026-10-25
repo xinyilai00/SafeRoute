@@ -31,6 +31,7 @@ SUSPECT_RATIO, SUSPECT_EXTRA_MIN = 2.5, 8.0  # live time this far above free-flo
 MAX_SUPPORT_POINTS = 150                   # TomTom's limit per request
 ETA_TTL_S, INCIDENT_TTL_S = 60, 120
 TIMEOUT_S = 8.0
+MAX_PARALLEL = 3                           # stay under TomTom's free-tier request rate
 
 _lock = threading.Lock()
 _eta_cache: dict = {}        # key -> (expires, minutes)
@@ -59,16 +60,28 @@ def live_minutes(coords):
         if hit and hit[0] > now:
             return hit[1]
     (olng, olat), (dlng, dlat) = pts[0], pts[-1]
-    try:
-        r = httpx.post(
-            ROUTING_URL.format(o=f"{olat},{olng}", d=f"{dlat},{dlng}"),
-            params={"key": os.environ["TOMTOM_API_KEY"], "traffic": "true", "routeType": "fastest"},
-            json={"supportingPoints": [{"latitude": lat, "longitude": lng} for lng, lat in pts]},
-            timeout=TIMEOUT_S)
-        r.raise_for_status()
-        minutes = r.json()["routes"][0]["summary"]["travelTimeInSeconds"] / 60.0
-    except Exception as e:  # network, quota, bad key, no route: fall back to free-flow
-        print(f"live: TomTom ETA failed ({type(e).__name__})")
+    minutes = None
+    for attempt in range(2):  # one retry, for TomTom's per-second rate limit (429) and brief 5xx
+        try:
+            r = httpx.post(
+                ROUTING_URL.format(o=f"{olat},{olng}", d=f"{dlat},{dlng}"),
+                params={"key": os.environ["TOMTOM_API_KEY"], "traffic": "true", "routeType": "fastest"},
+                json={"supportingPoints": [{"latitude": lat, "longitude": lng} for lng, lat in pts]},
+                timeout=TIMEOUT_S)
+            r.raise_for_status()
+            minutes = r.json()["routes"][0]["summary"]["travelTimeInSeconds"] / 60.0
+            break
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            print(f"live: TomTom ETA failed (HTTP {status})")
+            if attempt == 0 and (status == 429 or status >= 500):
+                time.sleep(0.7)
+                continue
+            return None
+        except Exception as e:  # network, bad key, no route: fall back to free-flow
+            print(f"live: TomTom ETA failed ({type(e).__name__})")
+            return None
+    if minutes is None:
         return None
     with _lock:
         _eta_cache[key] = (now + ETA_TTL_S, minutes)
@@ -154,7 +167,7 @@ def apply_live(cands):
     info = {"live": False, "dropped": 0}
     if not enabled() or not cands:
         return info
-    with ThreadPoolExecutor(max_workers=len(cands)) as pool:
+    with ThreadPoolExecutor(max_workers=min(len(cands), MAX_PARALLEL)) as pool:
         times = list(pool.map(lambda c: live_minutes(c["coords"]), cands))
     for c in cands:
         c["free_minutes"] = c["minutes"]

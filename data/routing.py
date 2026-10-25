@@ -15,6 +15,48 @@ import httpx
 
 M_PER_MILE = 1609.344
 
+# User options for "avoid". A strong preference (priority x0.01 = about 100x less attractive), not a
+# ban: a destination only reachable by a toll road or highway still gets a route.
+AVOID_OPTIONS = ("tolls", "highways")
+AVOID_PRIORITY = "0.01"
+AVOID_RULES = {
+    "tolls": "toll == ALL",  # not truck-only (HGV) tolls, which don't charge cars
+    "highways": "road_class == MOTORWAY || road_class == TRUNK",  # ramps share their road class
+}
+HIGHWAY_CLASSES = ("motorway", "trunk")
+
+
+def build_custom_model(avoid=None, blocked=None):
+    """One GraphHopper custom model for everything that shapes the route.
+
+    `avoid`: subset of AVOID_OPTIONS. `blocked`: GeoJSON geometry of current road closures
+    (priority 0 = never route through). Returns None when there is nothing to say.
+    """
+    priority = [{"if": AVOID_RULES[a], "multiply_by": AVOID_PRIORITY} for a in AVOID_OPTIONS if a in (avoid or [])]
+    model = {}
+    if blocked:
+        priority.append({"if": "in_closure", "multiply_by": "0"})
+        model["areas"] = {"type": "FeatureCollection",
+                          "features": [{"id": "closure", "type": "Feature", "properties": {}, "geometry": blocked}]}
+    if not priority:
+        return None
+    model["priority"] = priority
+    return model
+
+
+def share_on(coords, intervals, kinds):
+    """Fraction of the route's length whose stretch type is in `kinds` (case-insensitive).
+
+    `intervals` is GraphHopper path details: [[start, end, value], ...] over point indices.
+    """
+    if not intervals or len(coords) < 2:
+        return 0.0
+    kinds = {k.lower() for k in kinds}
+    segs = [_haversine_m(coords[i], coords[i + 1]) for i in range(len(coords) - 1)]
+    total = sum(segs)
+    on = sum(sum(segs[a:b]) for a, b, v in intervals if str(v).lower() in kinds)
+    return on / total if total else 0.0
+
 
 def _haversine_m(a, b):
     (lon1, lat1), (lon2, lat2) = a, b
@@ -50,7 +92,7 @@ class FakeProvider:
     name = "fake"
     AVG_MPS = 11.0  # ~25 mph
 
-    def routes(self, origin, destination, blocked=None):
+    def routes(self, origin, destination, blocked=None, avoid=None):
         o = [origin["lng"], origin["lat"]]
         d = [destination["lng"], destination["lat"]]
         dx, dy = d[0] - o[0], d[1] - o[1]
@@ -94,8 +136,9 @@ class GraphHopperProvider:
         self.url, self.profile = url.rstrip("/"), profile
         self.max_paths, self.timeout = max_paths, timeout
 
-    def routes(self, origin, destination, blocked=None):
-        """`blocked`: GeoJSON geometry GraphHopper must not route through (road closures)."""
+    def routes(self, origin, destination, blocked=None, avoid=None):
+        """`blocked`: GeoJSON of road closures to route around. `avoid`: subset of AVOID_OPTIONS."""
+        avoid = [a for a in AVOID_OPTIONS if a in (avoid or [])]
         body = {
             "points": [[origin["lng"], origin["lat"]], [destination["lng"], destination["lat"]]],
             "profile": self.profile,
@@ -106,14 +149,13 @@ class GraphHopperProvider:
             "instructions": True,
             "points_encoded": False,
             "ch.disable": True,  # alternatives don't work with CH
-            "details": ["road_class"],  # per-stretch road type, used to discount highway crash counts
+            # per-stretch road type (highway crash discount, avoid check); toll only when it's needed,
+            # so a GraphHopper import without the toll value can't break ordinary requests
+            "details": ["road_class"] + (["toll"] if "tolls" in avoid else []),
         }
-        if blocked:
-            body["custom_model"] = {
-                "priority": [{"if": "in_closure", "multiply_by": "0"}],
-                "areas": {"type": "FeatureCollection",
-                          "features": [{"id": "closure", "type": "Feature", "properties": {}, "geometry": blocked}]},
-            }
+        custom_model = build_custom_model(avoid, blocked)
+        if custom_model:
+            body["custom_model"] = custom_model
         r = httpx.post(f"{self.url}/route", json=body, timeout=self.timeout,
                        headers={"ngrok-skip-browser-warning": "true"})  # skips ngrok free-tier interstitial
         r.raise_for_status()
@@ -123,7 +165,8 @@ class GraphHopperProvider:
                         "minutes": p["time"] / 60000.0,
                         "miles": p["distance"] / M_PER_MILE,
                         "instructions": p.get("instructions", []),
-                        "road_classes": p.get("details", {}).get("road_class", [])})
+                        "road_classes": p.get("details", {}).get("road_class", []),
+                        "tolls": p.get("details", {}).get("toll", [])})
         return out
 
 

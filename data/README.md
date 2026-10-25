@@ -46,6 +46,15 @@ Set `TOMTOM_API_KEY` in the gitignored `.env`; without it everything below is sk
 - **Sanity checks:** candidates that still touch a closure, or whose live time is over 2.5x free-flow and 8+ min more, are dropped (unless that would drop all of them). If the chosen route still crosses a closure, the summary says so.
 - Response headers: `X-Live-Traffic: tomtom|off`, `X-Closures-Skipped: N`. Free tier is about 2,500 requests/day; one `/route` costs one TomTom call per candidate (up to 4) plus a cached incidents call.
 
+## Avoid tolls / highways
+
+`POST /route` accepts an optional `avoid` list (`"tolls"`, `"highways"`; contract in the root `CLAUDE.md`). `routing.build_custom_model` turns it into one GraphHopper custom model together with the closure block, so the two never overwrite each other: `toll == ALL` and `road_class == MOTORWAY || road_class == TRUNK` get priority x0.01 (soft), closed streets priority 0.
+- `toll` is only requested as a path detail when `tolls` is in `avoid`, so a GraphHopper import without the toll value can't break ordinary requests.
+- If GraphHopper answers 400 to the custom model, `/route` retries without the closure block (keeping `avoid`), then without `avoid`, and says so in the summary. Other errors (engine down, timeout) are not retried.
+- After routing, the chosen routes are checked: if more than 5% of a route is still on an avoided road type, the summary says "couldn't fully avoid ...".
+- Header `X-Avoid-Applied` lists what was actually applied (`none` if nothing). Fake routes ignore `avoid`.
+- On real Austin trips, avoiding highways costs a lot of time (Round Rock to UT: 22.8 to 37.7 min live); avoiding tolls costs little (36.9 to 38.9 min Cedar Park to the airport).
+
 ## Method notes
 
 - Severity weights (build_risk.py): fatal 10, serious 6, non-incapacitating 2, possible 1, no injury 0.5. Cell value is log-scaled, then divided by the max, so the heatmap isn't one red dot. `--weights cost` uses the city's per-crash cost estimates instead; `backtest.py` shows it predicts later crashes slightly worse (rare fatals add noise), so severity is the default.

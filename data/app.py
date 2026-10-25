@@ -10,12 +10,14 @@ from pathlib import Path
 
 import json
 import os
+from typing import Literal
 
+import httpx
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, field_validator
 
 import live
 import routing
@@ -108,6 +110,12 @@ class RouteRequest(BaseModel):
     destination: Point
     profile: str = "teen"
     safety_weight: float = Field(1.0, ge=0, le=1)
+    avoid: list[Literal["tolls", "highways"]] = Field(default_factory=list)  # optional road types to steer clear of
+
+    @field_validator("avoid")
+    @classmethod
+    def _unique(cls, v):
+        return [a for a in routing.AVOID_OPTIONS if a in v]  # dedupe, canonical order
 
 
 def _events(hazards):
@@ -138,6 +146,48 @@ def _pick_safest(cands, fastest, w, rules):
     return best
 
 
+AVOID_NOTE_SHARE = 0.05  # if more than 5% of a route is still on an avoided road type, say so
+
+
+def _fetch_candidates(provider, o, d, blocked, avoid):
+    """Candidates from the routing engine, plus the avoid options actually applied.
+
+    GraphHopper answers 400 for a custom model it can't use (an endpoint inside a closure, a missing
+    toll value). Only then do we retry, dropping the closure block first (keeping the user's avoid),
+    then the avoid itself. Any other error (engine down, timeout) is raised straight away.
+    """
+    attempts = [(blocked, avoid), (None, avoid), (blocked, []), (None, [])]
+    seen, last = set(), None
+    for blk, av in attempts:
+        key = (bool(blk), tuple(av))
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            return provider.routes(o, d, blocked=blk, avoid=av), list(av)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code != 400:
+                raise
+            last = e
+    raise last
+
+
+def _avoid_note(cands, requested, applied, provider_name):
+    """Honest one-liner when the user's avoid choice wasn't (fully) honoured, else ""."""
+    if not requested or provider_name == "fake":
+        return ""
+    missed = [a for a in requested if a not in applied]
+    if missed:
+        return f" (couldn't avoid {' or '.join(missed)}: the routing engine rejected it)"
+    notes = []
+    for a, key, kinds in (("tolls", "tolls", ["all"]), ("highways", "road_classes", routing.HIGHWAY_CLASSES)):
+        if a in requested:
+            share = max(routing.share_on(c["coords"], c.get(key), kinds) for c in cands)
+            if share > AVOID_NOTE_SHARE:
+                notes.append(f"{a} ({share:.0%} of the route)")
+    return f" (couldn't fully avoid {' or '.join(notes)})" if notes else ""
+
+
 @app.post("/route")
 def route(req: RouteRequest):
     for name, p in (("origin", req.origin), ("destination", req.destination)):
@@ -149,12 +199,7 @@ def route(req: RouteRequest):
     o, d = req.origin.model_dump(), req.destination.model_dump()
     blocked = live.closure_area() if live.enabled() and provider.name != "fake" else None
     try:
-        try:
-            cands = provider.routes(o, d, blocked=blocked)
-        except Exception:
-            if not blocked:
-                raise
-            cands = provider.routes(o, d)  # e.g. an endpoint sits inside a closure: route normally
+        cands, applied = _fetch_candidates(provider, o, d, blocked, req.avoid)
     except Exception as e:  # GraphHopper down / bad point
         raise HTTPException(502, f"routing engine error: {e}")
     if not cands:
@@ -191,6 +236,7 @@ def route(req: RouteRequest):
         summary += " (warning: this route crosses a reported road closure)"
     elif info["dropped"]:
         summary += f" (avoids {info['dropped']} route{'s' if info['dropped'] != 1 else ''} through road closures)"
+    summary += _avoid_note([fastest, safest], req.avoid, applied, provider.name)
     body = {
         "fastest": _summary(fastest),
         "safest": _summary(safest),
@@ -200,4 +246,5 @@ def route(req: RouteRequest):
     }
     return JSONResponse(body, headers={"X-Data-Source": provider.name,
                                        "X-Live-Traffic": "tomtom" if info["live"] else "off",
-                                       "X-Closures-Skipped": str(info["dropped"])})
+                                       "X-Closures-Skipped": str(info["dropped"]),
+                                       "X-Avoid-Applied": ",".join(applied) or "none"})

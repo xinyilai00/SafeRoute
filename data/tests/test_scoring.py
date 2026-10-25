@@ -4,6 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 import scoring  # noqa: E402
@@ -302,6 +303,12 @@ def test_closure_area_is_geojson_and_small(monkeypatch):
     live._closure_cache.pop("area", None)
 
 
+def _http_error(status):
+    import httpx
+    req = httpx.Request("POST", "http://gh.test/route")
+    return httpx.HTTPStatusError("boom", request=req, response=httpx.Response(status, request=req))
+
+
 def test_route_retries_without_blocked_area(monkeypatch):
     import live, routing
     calls = []
@@ -309,14 +316,149 @@ def test_route_retries_without_blocked_area(monkeypatch):
     class P:
         name = "graphhopper"
 
-        def routes(self, o, d, blocked=None):
-            calls.append(bool(blocked))
+        def routes(self, o, d, blocked=None, avoid=None):
+            calls.append((bool(blocked), tuple(avoid or [])))
             if blocked:
-                raise RuntimeError("point inside blocked area")
+                raise _http_error(400)  # e.g. an endpoint inside the blocked area
             return routing.FakeProvider().routes(o, d)
     monkeypatch.setattr(routing, "get_provider", lambda: P())
     monkeypatch.setattr(live, "enabled", lambda: True)
     monkeypatch.setattr(live, "closure_area", lambda: {"type": "Polygon", "coordinates": []})
     monkeypatch.setattr(live, "apply_live", lambda cands: {"live": False, "dropped": 0})
     r = TestClient(app).post("/route", json=ROUTE_REQ)
-    assert r.status_code == 200 and calls == [True, False]
+    assert r.status_code == 200 and calls == [(True, ()), (False, ())]
+
+# ---------- avoid tolls / highways ----------
+
+def test_build_custom_model_variants():
+    import routing
+    assert routing.build_custom_model(None, None) is None and routing.build_custom_model([], None) is None
+    m = routing.build_custom_model(["tolls"])
+    assert m == {"priority": [{"if": "toll == ALL", "multiply_by": "0.01"}]}
+    h = routing.build_custom_model(["highways"])
+    assert h["priority"][0]["if"] == "road_class == MOTORWAY || road_class == TRUNK"
+    both = routing.build_custom_model(["highways", "tolls"])
+    assert [r["if"] for r in both["priority"]] == ["toll == ALL", "road_class == MOTORWAY || road_class == TRUNK"]
+    area = {"type": "Polygon", "coordinates": []}
+    merged = routing.build_custom_model(["tolls"], area)           # one model: avoid rules AND closures
+    assert [r["if"] for r in merged["priority"]] == ["toll == ALL", "in_closure"]
+    assert merged["priority"][-1]["multiply_by"] == "0" and merged["areas"]["features"][0]["geometry"] == area
+    only_closure = routing.build_custom_model(None, area)
+    assert [r["if"] for r in only_closure["priority"]] == ["in_closure"]
+
+
+def test_share_on():
+    import routing
+    coords = [[-97.7 + i * 0.001, 30.2] for i in range(11)]       # 10 equal segments
+    assert routing.share_on(coords, [[0, 4, "MOTORWAY"], [4, 10, "residential"]], ["motorway"]) == pytest.approx(0.4, abs=1e-6)
+    assert routing.share_on(coords, [], ["motorway"]) == 0.0
+    assert routing.share_on(coords, [[0, 10, "all"]], ["ALL"]) == pytest.approx(1.0)
+
+
+def test_graphhopper_request_body(monkeypatch):
+    import httpx, routing
+    sent = {}
+
+    def fake_post(url, json=None, **kw):
+        sent.update(json)
+        return httpx.Response(200, json={"paths": []}, request=httpx.Request("POST", url))
+    monkeypatch.setattr(httpx, "post", fake_post)
+    gh = routing.GraphHopperProvider("http://gh.test")
+    o, d = {"lat": 30.28, "lng": -97.73}, {"lat": 30.26, "lng": -97.74}
+    gh.routes(o, d)
+    assert "custom_model" not in sent and sent["details"] == ["road_class"]
+    assert sent["points"] == [[-97.73, 30.28], [-97.74, 30.26]] and sent["alternative_route.max_paths"] == 5
+    gh.routes(o, d, avoid=["tolls"])
+    assert sent["details"] == ["road_class", "toll"] and sent["custom_model"]["priority"][0]["if"] == "toll == ALL"
+    gh.routes(o, d, blocked={"type": "Polygon", "coordinates": []}, avoid=["highways"])
+    assert len(sent["custom_model"]["priority"]) == 2 and "areas" in sent["custom_model"]
+
+
+class _GHStub:
+    """GraphHopper stand-in: 400s for any custom model containing `reject`, else returns one route."""
+    name = "graphhopper"
+
+    def __init__(self, reject=None, tolls=None, road_classes=None):
+        self.reject, self.calls = reject, []
+        self.tolls, self.road_classes = tolls or [], road_classes or []
+
+    def routes(self, o, d, blocked=None, avoid=None):
+        avoid = list(avoid or [])
+        self.calls.append((bool(blocked), tuple(avoid)))
+        if self.reject and self.reject in avoid:
+            raise _http_error(400)
+        import routing
+        c = routing.FakeProvider().routes(o, d)[0]
+        n = len(c["coords"])
+        c["tolls"] = [[0, n - 1, v] for v in self.tolls]
+        c["road_classes"] = [[0, n - 1, v] for v in self.road_classes]
+        return [c]
+
+
+def _route_with(monkeypatch, stub, body):
+    import live, routing
+    monkeypatch.setattr(routing, "get_provider", lambda: stub)
+    monkeypatch.setattr(live, "enabled", lambda: False)
+    return TestClient(app).post("/route", json=body)
+
+
+def test_avoid_applied_and_reported(monkeypatch):
+    stub = _GHStub(tolls=["no"], road_classes=["residential"])
+    r = _route_with(monkeypatch, stub, {**ROUTE_REQ, "avoid": ["tolls", "highways", "tolls"]})
+    assert r.status_code == 200 and r.headers["x-avoid-applied"] == "tolls,highways"
+    assert stub.calls == [(False, ("tolls", "highways"))]
+    assert "couldn't" not in r.json()["comparison"]["summary"]
+
+
+def test_avoid_note_when_route_still_uses_tolls(monkeypatch):
+    r = _route_with(monkeypatch, _GHStub(tolls=["all"]), {**ROUTE_REQ, "avoid": ["tolls"]})
+    assert "couldn't fully avoid tolls (100% of the route)" in r.json()["comparison"]["summary"]
+
+
+def test_avoid_rejected_by_engine_is_reported_not_hidden(monkeypatch):
+    stub = _GHStub(reject="tolls")
+    r = _route_with(monkeypatch, stub, {**ROUTE_REQ, "avoid": ["tolls"]})
+    assert r.status_code == 200 and r.headers["x-avoid-applied"] == "none"
+    assert "couldn't avoid tolls" in r.json()["comparison"]["summary"]
+    assert stub.calls == [(False, ("tolls",)), (False, ())]
+
+
+def test_non_400_engine_error_is_not_retried(monkeypatch):
+    class Down(_GHStub):
+        def routes(self, o, d, blocked=None, avoid=None):
+            self.calls.append(1)
+            raise _http_error(503)
+    stub = Down()
+    r = _route_with(monkeypatch, stub, {**ROUTE_REQ, "avoid": ["tolls"]})
+    assert r.status_code == 502 and len(stub.calls) == 1
+
+
+def test_avoid_validation(monkeypatch):
+    c = TestClient(app)
+    assert c.post("/route", json={**ROUTE_REQ, "avoid": ["ferries"]}).status_code == 422
+    assert c.post("/route", json={**ROUTE_REQ, "avoid": "tolls"}).status_code == 422
+    assert c.post("/route", json=ROUTE_REQ).status_code == 200            # avoid is optional
+    r = c.post("/route", json={**ROUTE_REQ, "avoid": ["tolls"]})          # fake provider: accepted, no note
+    assert r.status_code == 200 and "couldn't" not in r.json()["comparison"]["summary"]
+
+
+def test_live_minutes_retries_once_on_rate_limit(monkeypatch):
+    import httpx, live
+    monkeypatch.setenv("TOMTOM_API_KEY", "x")
+    monkeypatch.setattr(live.time, "sleep", lambda s: None)
+    live._eta_cache.clear()
+    calls = []
+
+    def fake_post(url, **kw):
+        calls.append(1)
+        req = httpx.Request("POST", url)
+        if len(calls) == 1:
+            return httpx.Response(429, request=req)
+        return httpx.Response(200, request=req, json={"routes": [{"summary": {"travelTimeInSeconds": 600}}]})
+    monkeypatch.setattr(httpx, "post", fake_post)
+    assert live.live_minutes([[-97.7, 30.2], [-97.71, 30.21]]) == 10.0 and len(calls) == 2
+    live._eta_cache.clear()
+    calls.clear()
+    monkeypatch.setattr(httpx, "post", lambda url, **kw: (calls.append(1), httpx.Response(400, request=httpx.Request("POST", url)))[1])
+    assert live.live_minutes([[-97.7, 30.2], [-97.71, 30.22]]) is None and len(calls) == 1   # 400: no retry
+    live._eta_cache.clear()
