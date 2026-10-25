@@ -90,7 +90,7 @@ class FakeProvider:
 class GraphHopperProvider:
     name = "graphhopper"
 
-    def __init__(self, url, profile="car", max_paths=4, timeout=15.0):
+    def __init__(self, url, profile="car", max_paths=5, timeout=15.0):
         self.url, self.profile = url.rstrip("/"), profile
         self.max_paths, self.timeout = max_paths, timeout
 
@@ -101,6 +101,8 @@ class GraphHopperProvider:
             "profile": self.profile,
             "algorithm": "alternative_route",
             "alternative_route.max_paths": self.max_paths,
+            "alternative_route.max_weight_factor": 1.5,  # an alternative may be up to 50% slower than the best
+            "alternative_route.max_share_factor": 0.8,   # and may share up to 80% of its length with it
             "instructions": True,
             "points_encoded": False,
             "ch.disable": True,  # alternatives don't work with CH
