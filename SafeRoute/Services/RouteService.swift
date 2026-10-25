@@ -28,7 +28,8 @@ nonisolated struct RouteService {
         origin: CLLocationCoordinate2D,
         destination: CLLocationCoordinate2D,
         profile: Profile,
-        safetyWeight: Double = Config.defaultSafetyWeight
+        safetyWeight: Double = Config.defaultSafetyWeight,
+        avoid: [String] = []
     ) async throws -> RouteResult {
         guard Config.isBackendConfigured else {
             // Demo path: pause briefly so the loading state is visible; the mock would otherwise return instantly.
@@ -41,7 +42,8 @@ nonisolated struct RouteService {
                 origin: Coordinate(origin),
                 destination: Coordinate(destination),
                 profile: profile,
-                safetyWeight: safetyWeight
+                safetyWeight: safetyWeight,
+                avoid: avoid
             )
             guard let url = URL(string: Config.baseURL + "/route") else { throw BackendError.badURL }
             var request = URLRequest(url: url, timeoutInterval: 10)

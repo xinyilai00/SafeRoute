@@ -19,6 +19,8 @@ struct MapScreen: View {
     /// Remembered between launches; mirrored into `model.profile`.
     @AppStorage(Config.profileStorageKey) private var storedProfile: Profile = .teen
     @AppStorage(Config.mapStyleStorageKey) private var mapStyleChoice: MapStyleChoice = .standard
+    @AppStorage(Config.allowHighwaysStorageKey) private var allowsHighways = true
+    @AppStorage(Config.allowTollsStorageKey) private var allowsTolls = true
 
     /// Height reserved at the top so camera fitting keeps routes out from under the search field.
     private let searchBarReserve: CGFloat = 64
@@ -116,6 +118,7 @@ struct MapScreen: View {
             GlassEffectContainer(spacing: 12) {
                 VStack(spacing: 12) {
                     ProfilePicker(selection: $model.profile)
+                    RouteOptionsMenu(allowsHighways: $allowsHighways, allowsTolls: $allowsTolls)
                     MapStyleMenu(selection: $mapStyleChoice)
                 }
             }
@@ -142,6 +145,8 @@ struct MapScreen: View {
         .ignoresSafeArea(.keyboard)
         .onAppear {
             model.profile = storedProfile
+            model.allowsHighways = allowsHighways
+            model.allowsTolls = allowsTolls
             locationManager.start()
             model.loadRiskGridIfNeeded()
         }
@@ -152,6 +157,8 @@ struct MapScreen: View {
                 findRoute()
             }
         }
+        .onChange(of: allowsHighways) { _, _ in routeOptionsChanged() }
+        .onChange(of: allowsTolls) { _, _ in routeOptionsChanged() }
         .onChange(of: model.result) { _, result in
             selectedEventKey = nil
             labelAnchors = result.map { RouteLabelPlacement.anchors(for: $0.response) } ?? nil
@@ -237,6 +244,15 @@ struct MapScreen: View {
     }
 
     // MARK: - Actions
+
+    /// Re-requests the route (if one is showing or loading) with the new highway/toll choice.
+    private func routeOptionsChanged() {
+        model.allowsHighways = allowsHighways
+        model.allowsTolls = allowsTolls
+        if model.result != nil || model.isLoading {
+            findRoute()
+        }
+    }
 
     private func findRoute() {
         model.findRoute(from: locationManager.coordinate)

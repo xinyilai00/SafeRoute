@@ -11,6 +11,14 @@ import Observation
 @Observable
 final class MapScreenModel {
     var profile: Profile = .teen
+    /// Route options. Both allowed by default; turning one off sends it as `avoid`.
+    var allowsHighways = true
+    var allowsTolls = true
+
+    /// The `avoid` list for the backend request.
+    var avoid: [String] {
+        (allowsHighways ? [] : ["highways"]) + (allowsTolls ? [] : ["tolls"])
+    }
     private(set) var destination: MKMapItem?
     private(set) var result: RouteResult?
     private(set) var isLoading = false
@@ -79,6 +87,7 @@ final class MapScreenModel {
         let originCoordinate = origin ?? Config.fallbackOrigin
         let destinationCoordinate = destination.location.coordinate
         let profile = profile
+        let avoid = avoid
         isLoading = true
 
         routeTask = Task {
@@ -86,7 +95,8 @@ final class MapScreenModel {
                 let result = try await routeService.fetchRoute(
                     origin: originCoordinate,
                     destination: destinationCoordinate,
-                    profile: profile
+                    profile: profile,
+                    avoid: avoid
                 )
                 guard !Task.isCancelled else { return }
                 self.result = result

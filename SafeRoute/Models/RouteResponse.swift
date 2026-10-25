@@ -24,9 +24,11 @@ nonisolated struct RouteRequest: Encodable {
     let profile: Profile
     /// 0 = fastest, 1 = safest. Fixed at 1.0 until a slider exists.
     let safetyWeight: Double
+    /// Road types to steer clear of: any of `"highways"` and `"tolls"`. Empty = both allowed (the default).
+    let avoid: [String]
 
     enum CodingKeys: String, CodingKey {
-        case origin, destination, profile
+        case origin, destination, profile, avoid
         case safetyWeight = "safety_weight"
     }
 }
