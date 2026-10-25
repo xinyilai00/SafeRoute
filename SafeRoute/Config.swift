@@ -26,12 +26,12 @@ nonisolated enum Config {
     /// UserDefaults key (via @AppStorage) for the remembered map style.
     static let mapStyleStorageKey = "mapStyle"
 
+    /// UserDefaults keys (via @AppStorage) for the route options sent as `avoid`.
+    static let avoidTollsStorageKey = "avoidTolls"
+    static let avoidHighwaysStorageKey = "avoidHighways"
+
     /// `safety_weight` sent with every route request (0 = fastest, 1 = safest) until a slider exists.
     static let defaultSafetyWeight = 1.0
-
-    /// `@AppStorage` keys for the route options (both default to allowed).
-    static let allowHighwaysStorageKey = "allowHighways"
-    static let allowTollsStorageKey = "allowTolls"
 
     /// Origin used when the user's location is unavailable: UT Austin, where the mock routes start.
     static let fallbackOrigin = CLLocationCoordinate2D(latitude: 30.2849, longitude: -97.7341)

@@ -11,14 +11,6 @@ import Observation
 @Observable
 final class MapScreenModel {
     var profile: Profile = .teen
-    /// Route options. Both allowed by default; turning one off sends it as `avoid`.
-    var allowsHighways = true
-    var allowsTolls = true
-
-    /// The `avoid` list for the backend request.
-    var avoid: [String] {
-        (allowsHighways ? [] : ["highways"]) + (allowsTolls ? [] : ["tolls"])
-    }
     private(set) var destination: MKMapItem?
     private(set) var result: RouteResult?
     private(set) var isLoading = false
@@ -78,16 +70,15 @@ final class MapScreenModel {
         isLoading = false
     }
 
-    /// Requests fastest + safest routes for the current destination and profile.
+    /// Requests fastest + safest routes for the current destination, profile and route options.
     /// `origin` is the user's location; when unavailable the UT Austin fallback keeps the demo working.
-    func findRoute(from origin: CLLocationCoordinate2D?) {
+    func findRoute(from origin: CLLocationCoordinate2D?, avoiding avoid: AvoidOptions = AvoidOptions()) {
         guard let destination else { return }
         routeTask?.cancel()
 
         let originCoordinate = origin ?? Config.fallbackOrigin
         let destinationCoordinate = destination.location.coordinate
         let profile = profile
-        let avoid = avoid
         isLoading = true
 
         routeTask = Task {
@@ -96,7 +87,7 @@ final class MapScreenModel {
                     origin: originCoordinate,
                     destination: destinationCoordinate,
                     profile: profile,
-                    avoid: avoid
+                    avoiding: avoid
                 )
                 guard !Task.isCancelled else { return }
                 self.result = result

@@ -43,12 +43,18 @@ struct RouteSummaryCard: View {
                 ProgressView()
                     .controlSize(.small)
             }
+            if result.isLiveTraffic {
+                liveTrafficPill
+            }
             addedTimeBadge
         }
 
-        Text(response.avoidanceSentence ?? response.comparison.summary)
+        Text(response.avoidanceSentence ?? result.summaryWithoutNotes)
             .font(.body)
             .fixedSize(horizontal: false, vertical: true)
+
+        closureLine
+        avoidLines
 
         VStack(spacing: 10) {
             routeRow(name: "Safe route", color: .green, route: safest)
@@ -102,19 +108,62 @@ struct RouteSummaryCard: View {
     }
 
     private var chips: some View {
+        chipGrid(response.avoidedHazards, tint: .green)
+    }
+
+    private func chipGrid(_ hazards: [HazardCount], tint: Color) -> some View {
         LazyVGrid(
             columns: [GridItem(.adaptive(minimum: 150), spacing: 8, alignment: .leading)],
             alignment: .leading,
             spacing: 8
         ) {
-            ForEach(response.avoidedHazards) { hazard in
+            ForEach(hazards) { hazard in
                 Label(hazard.text, systemImage: hazard.kind.symbolName)
                     .font(.subheadline.weight(.medium))
                     .lineLimit(2)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
-                    .background(.green.opacity(0.14), in: Capsule())
+                    .background(tint.opacity(0.14), in: Capsule())
             }
+        }
+    }
+
+    private var liveTrafficPill: some View {
+        Label("Live traffic", systemImage: "dot.radiowaves.left.and.right")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.blue)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.blue.opacity(0.14), in: Capsule())
+            .accessibilityLabel("ETAs use live traffic")
+    }
+
+    /// Closure information from the backend, when any: a warning if the route crosses one,
+    /// a reassurance when closed roads were routed around.
+    @ViewBuilder
+    private var closureLine: some View {
+        if let note = result.closureNote {
+            Label(note.text, systemImage: note.symbolName)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(note == .crosses ? .orange : .green)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// What the backend avoided for the user (`X-Avoid-Applied`), and its warning when it could not
+    /// fully honour the choice, styled like the closure warning.
+    @ViewBuilder
+    private var avoidLines: some View {
+        if let avoided = result.avoidApplied.listText {
+            Label("Avoiding \(avoided)", systemImage: "slider.horizontal.3")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+        }
+        if let note = result.avoidNote {
+            Label(note, systemImage: "exclamationmark.triangle.fill")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -132,10 +181,14 @@ struct RouteSummaryCard: View {
                 ProgressView()
                     .controlSize(.small)
             }
+            if result.isLiveTraffic {
+                liveTrafficPill
+            }
         }
-        Text("No detour makes this trip meaningfully safer. Take the direct route.")
-            .font(.body)
-            .fixedSize(horizontal: false, vertical: true)
+
+        closureLine
+        avoidLines
+
         HStack(spacing: 10) {
             Circle()
                 .fill(.green)
@@ -146,6 +199,21 @@ struct RouteSummaryCard: View {
             Text(miles(safest))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+        }
+
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Heads up on this route")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+            let hazards = safest.maneuverHazardCounts
+            if hazards.isEmpty {
+                Text("No risky merges or busy left turns on this route.")
+                    .font(.subheadline)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                chipGrid(hazards, tint: .orange)
+            }
         }
     }
 

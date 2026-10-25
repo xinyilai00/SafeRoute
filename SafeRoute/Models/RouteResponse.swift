@@ -24,8 +24,8 @@ nonisolated struct RouteRequest: Encodable {
     let profile: Profile
     /// 0 = fastest, 1 = safest. Fixed at 1.0 until a slider exists.
     let safetyWeight: Double
-    /// Road types to steer clear of: any of `"highways"` and `"tolls"`. Empty = both allowed (the default).
-    let avoid: [String]
+    /// `"tolls"` / `"highways"`. Nil (omitted from the JSON) when the user avoids nothing.
+    let avoid: [String]?
 
     enum CodingKeys: String, CodingKey {
         case origin, destination, profile, avoid
@@ -43,16 +43,16 @@ nonisolated struct RouteResponse: Decodable, Equatable {
     var routesAreIdentical: Bool { fastest.geometry == safest.geometry }
 
     /// Hazard types the safest route has fewer of than the fastest, most avoided first.
-    var avoidedHazards: [AvoidedHazard] {
+    var avoidedHazards: [HazardCount] {
         func counts(_ route: Route) -> [RiskEventType: Int] {
             route.riskEvents.reduce(into: [:]) { $0[$1.kind, default: 0] += 1 }
         }
         let fast = counts(fastest)
         let safe = counts(safest)
         return RiskEventType.allCases
-            .compactMap { kind -> AvoidedHazard? in
+            .compactMap { kind -> HazardCount? in
                 let difference = (fast[kind] ?? 0) - (safe[kind] ?? 0)
-                return difference > 0 ? AvoidedHazard(kind: kind, count: difference) : nil
+                return difference > 0 ? HazardCount(kind: kind, count: difference) : nil
             }
             .sorted { $0.count > $1.count }
     }
@@ -69,8 +69,8 @@ nonisolated struct RouteResponse: Decodable, Equatable {
     }
 }
 
-/// One hazard type the safe route has fewer of, with how many fewer.
-nonisolated struct AvoidedHazard: Identifiable {
+/// A hazard type with a count: how many a route has, or how many fewer the safe route has.
+nonisolated struct HazardCount: Identifiable {
     let kind: RiskEventType
     let count: Int
 
@@ -87,5 +87,73 @@ nonisolated struct RouteComparison: Decodable, Equatable {
         case minutesAdded = "minutes_added"
         case riskReductionPct = "risk_reduction_pct"
         case summary
+    }
+}
+
+/// Road-closure information the backend folds into `comparison.summary` and the `X-Closures-Skipped` header.
+nonisolated enum ClosureNote: Equatable {
+    /// The chosen route itself crosses a reported closure.
+    case crosses
+    /// The backend dropped this many candidate routes for crossing closures.
+    case avoids(Int)
+
+    var text: String {
+        switch self {
+        case .crosses: "This route crosses a reported road closure"
+        case .avoids(let count): "Avoids \(count) route\(count == 1 ? "" : "s") through road closures"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .crosses: "exclamationmark.triangle.fill"
+        case .avoids: "checkmark.circle.fill"
+        }
+    }
+}
+
+extension RouteResult {
+    /// Parsed from the summary text; falls back to the header count when the text says nothing.
+    var closureNote: ClosureNote? {
+        let summary = response.comparison.summary
+        if summary.localizedCaseInsensitiveContains("crosses a reported road closure") {
+            return .crosses
+        }
+        if let match = summary.firstMatch(of: #/avoids (\d+) routes? through road closures/#.ignoresCase()),
+           let count = Int(match.1), count > 0 {
+            return .avoids(count)
+        }
+        return closuresSkipped > 0 ? .avoids(closuresSkipped) : nil
+    }
+
+    /// The backend's "(couldn't avoid tolls: ...)" / "(couldn't fully avoid tolls (12% of the route))" note,
+    /// as a sentence without its outer parentheses. Nil when the avoid choice was fully honoured.
+    var avoidNote: String? {
+        let summary = response.comparison.summary
+        guard let match = summary.firstMatch(of: #/couldn't (fully )?avoid/#.ignoresCase()) else { return nil }
+        var note = String(summary[match.range.lowerBound...])
+        // The note is the last parenthetical; drop the closers that belong to parentheses opened before it.
+        var depth = 0
+        for character in note {
+            if character == "(" { depth += 1 } else if character == ")" { depth -= 1 }
+        }
+        while depth < 0, note.last == ")" {
+            note.removeLast()
+            depth += 1
+        }
+        note = note.trimmingCharacters(in: .whitespaces)
+        return note.isEmpty ? nil : note.prefix(1).uppercased() + note.dropFirst()
+    }
+
+    /// `comparison.summary` without the closure and avoid notes the backend appends in parentheses,
+    /// for use as a sentence when those notes are shown on their own lines.
+    var summaryWithoutNotes: String {
+        let summary = response.comparison.summary
+        let markers = [" (warning:", " (avoids ", " (couldn't"]
+        let cut = markers
+            .compactMap { summary.range(of: $0, options: .caseInsensitive)?.lowerBound }
+            .min()
+        guard let cut else { return summary }
+        return String(summary[..<cut]).trimmingCharacters(in: .whitespaces)
     }
 }
