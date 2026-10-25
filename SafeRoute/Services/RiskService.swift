@@ -5,11 +5,12 @@
 
 import Foundation
 
-/// Fetches the crash-risk grid (GET /risk). No mock: if this fails the heatmap toggle is hidden.
+/// Fetches the crash-risk grid (GET /risk) and prepares it for drawing.
+/// No mock: if this fails the heatmap toggle is hidden.
 nonisolated struct RiskService {
-    /// Decodes off the main actor; the payload is about 1 MB at the default threshold.
+    /// Runs off the main actor: the payload is around 1 MB and the banding/merging pass is CPU work.
     @concurrent
-    func fetchRiskCells(minRisk: Double = Config.riskMinimum) async throws -> [RiskCell] {
+    func fetchHeatmap(minRisk: Double = Config.riskMinimum) async throws -> [HeatBand] {
         guard Config.isBackendConfigured,
               var components = URLComponents(string: Config.baseURL + "/risk") else {
             throw BackendError.badURL
@@ -26,6 +27,7 @@ nonisolated struct RiskService {
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw BackendError.badStatus(http.statusCode)
         }
-        return try JSONDecoder().decode(RiskFeatureCollection.self, from: data).cells
+        let cells = try JSONDecoder().decode(RiskFeatureCollection.self, from: data).cells
+        return RiskHeatmap.bands(from: cells, minimum: minRisk)
     }
 }

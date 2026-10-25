@@ -16,8 +16,9 @@ nonisolated enum Config {
     static var isBackendConfigured: Bool { !baseURL.contains("REPLACE-ME") }
 
     /// `min_risk` for GET /risk: cells below this are not fetched or drawn. Raise it if the heatmap is laggy.
-    /// Measured against the server: 0.3 -> 3266 cells (1.3 MB), 0.4 -> 2310, 0.5 -> 1472, 0.6 -> 761.
-    static let riskMinimum = 0.3
+    /// Measured against the server, cells -> MapPolygons after banding into 5 colors and merging neighbours:
+    /// 0.3 -> 3266 cells / 2504 polygons (1.3 MB), 0.4 -> 2310 / 1836, 0.5 -> 1472 / 1215, 0.6 -> 761 / 665.
+    static let riskMinimum = 0.5
 
     /// `safety_weight` sent with every route request (0 = fastest, 1 = safest) until a slider exists.
     static let defaultSafetyWeight = 1.0

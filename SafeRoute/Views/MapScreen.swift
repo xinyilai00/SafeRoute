@@ -21,12 +21,8 @@ struct MapScreen: View {
             Map(position: $cameraPosition, scope: mapScope) {
                 UserAnnotation()
 
-                if model.showsRiskHeatmap, let cells = model.riskCells {
-                    ForEach(cells) { cell in
-                        MapPolygon(coordinates: cell.coordinates)
-                            .foregroundStyle(heatColor(for: cell.risk))
-                            .stroke(.clear, lineWidth: 0)
-                    }
+                if model.showsRiskHeatmap, let bands = model.riskBands {
+                    RiskHeatmapLayer(bands: bands)
                 }
 
                 if let result = model.result {
@@ -137,7 +133,7 @@ struct MapScreen: View {
             model.showsRiskHeatmap.toggle()
         } label: {
             HStack(spacing: 6) {
-                if model.riskCells == nil {
+                if model.riskBands == nil {
                     ProgressView()
                         .controlSize(.small)
                 } else {
@@ -151,16 +147,8 @@ struct MapScreen: View {
             .padding(.vertical, 6)
         }
         .buttonStyle(.glass)
-        .disabled(model.riskCells == nil)
+        .disabled(model.riskBands == nil)
         .accessibilityLabel(model.showsRiskHeatmap ? "Hide risk map" : "Show risk map")
-    }
-
-    /// Yellow (at `Config.riskMinimum`) through orange to red (risk 1.0), semi-transparent.
-    private func heatColor(for risk: Double) -> Color {
-        let span = max(1 - Config.riskMinimum, 0.01)
-        let t = min(max((risk - Config.riskMinimum) / span, 0), 1)
-        return Color(hue: (1 - t) * (60.0 / 360.0), saturation: 0.95, brightness: 1)
-            .opacity(0.3 + 0.3 * t)
     }
 
     // MARK: - Actions

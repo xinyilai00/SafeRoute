@@ -15,18 +15,18 @@ final class MapScreenModel {
     private(set) var result: RouteResult?
     private(set) var isLoading = false
 
-    /// Crash-risk heatmap cells: fetched once per launch and cached here.
+    /// Crash-risk heatmap, fetched once per launch and cached here already banded and merged.
     private(set) var riskGrid: RiskGridState = .loading
     var showsRiskHeatmap = false
 
     enum RiskGridState {
         case loading
-        case loaded([RiskCell])
+        case loaded([HeatBand])
         case failed
     }
 
-    var riskCells: [RiskCell]? {
-        if case .loaded(let cells) = riskGrid { return cells }
+    var riskBands: [HeatBand]? {
+        if case .loaded(let bands) = riskGrid { return bands }
         return nil
     }
 
@@ -46,7 +46,7 @@ final class MapScreenModel {
         guard riskTask == nil else { return }
         riskTask = Task {
             do {
-                riskGrid = .loaded(try await riskService.fetchRiskCells())
+                riskGrid = .loaded(try await riskService.fetchHeatmap())
             } catch {
                 riskGrid = .failed
                 print("MapScreenModel: risk grid unavailable, hiding heatmap toggle. \(error)")
