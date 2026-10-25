@@ -10,7 +10,7 @@ import SwiftUI
 /// a two-line From / To panel with a swap button; tapping either line opens the same search for that end.
 ///
 /// Focus is owned by the parent so tapping the map can dismiss the keyboard. The dropdown stays
-/// open after the keyboard goes away (map tap or list scroll) until Cancel or a selection.
+/// open after the keyboard goes away (map tap or list scroll) until the field's x or a selection.
 struct SearchBar: View {
     /// Which end of the route a search edits.
     enum Field {
@@ -53,16 +53,7 @@ struct SearchBar: View {
             if let endpoints, !isActive {
                 routePanel(endpoints)
             } else {
-                HStack(spacing: 12) {
-                    field
-                    if isActive {
-                        Button("Cancel") {
-                            cancel()
-                        }
-                        .font(.body)
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
-                    }
-                }
+                field
             }
             if isActive {
                 if editing == .origin || !search.suggestions.isEmpty {
@@ -117,19 +108,16 @@ struct SearchBar: View {
             if search.isSearching || search.isResolving {
                 ProgressView()
                     .controlSize(.small)
-            } else if !query.isEmpty {
+            } else if isActive || !query.isEmpty {
+                // The only way out of an open search, so it shows as soon as the field is active, not just once typing starts.
                 Button {
-                    query = ""
-                    search.clear()
-                    if endpoints == nil {
-                        onClear()
-                    }
+                    cancel()
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Clear search")
+                .accessibilityLabel(query.isEmpty ? "Close search" : "Clear search")
             }
         }
         .padding(.horizontal, 14)
@@ -330,11 +318,16 @@ struct SearchBar: View {
         }
     }
 
-    /// Closes the search without picking anything; in the neutral state the typed text is kept.
+    /// The field's x: clears the text and closes the search. With a route up the From / To panel comes back;
+    /// in the neutral state the parent returns the map to its neutral state (recentered on the user).
     private func cancel() {
+        query = ""
+        search.clear()
         isFocused.wrappedValue = false
         isActive = false
-        search.clear()
+        if endpoints == nil {
+            onClear()
+        }
     }
 }
 
