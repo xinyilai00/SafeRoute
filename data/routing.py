@@ -103,6 +103,7 @@ class GraphHopperProvider:
             "instructions": True,
             "points_encoded": False,
             "ch.disable": True,  # alternatives don't work with CH
+            "details": ["road_class"],  # per-stretch road type, used to discount highway crash counts
         }
         r = httpx.post(f"{self.url}/route", json=body, timeout=self.timeout,
                        headers={"ngrok-skip-browser-warning": "true"})  # skips ngrok free-tier interstitial
@@ -112,7 +113,8 @@ class GraphHopperProvider:
             out.append({"coords": p["points"]["coordinates"],
                         "minutes": p["time"] / 60000.0,
                         "miles": p["distance"] / M_PER_MILE,
-                        "instructions": p.get("instructions", [])})
+                        "instructions": p.get("instructions", []),
+                        "road_classes": p.get("details", {}).get("road_class", [])})
         return out
 
 

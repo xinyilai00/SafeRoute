@@ -7,6 +7,9 @@
 precision 5; pass `precision=6` through `score_route` if you configured that) or a
 list of GeoJSON-order [lon, lat] pairs (points_encoded=false -> route["points"]["coordinates"]).
 
+`road_classes` is GraphHopper's path details (`details=["road_class"]`): [[start, end, "motorway"], ...]
+over point indices; highway stretches get their crash risk discounted (see HIGHWAY_CRASH_FACTOR).
+
 `instructions` is GraphHopper's route["instructions"] list (needs `instructions=true`).
 It is optional so crash-grid risk can still be scored without it, but the turn
 penalties (left turns, merges, roundabouts, quick turns after an exit) need it.
@@ -151,7 +154,16 @@ def _project(polyline, precision=5):
     return xy, np.concatenate([[0.0], np.cumsum(seg)])
 
 
-def _crash_component(xy, cum, w):
+def _segment_factors(n_vertices, road_classes):
+    """Per-segment crash multiplier (1.0, or HIGHWAY_CRASH_FACTOR on motorway/trunk stretches)."""
+    f = np.ones(max(n_vertices - 1, 0))
+    for a, b, kind in road_classes or []:
+        if str(kind).lower() in HIGHWAY_CLASSES:
+            f[a:b] = HIGHWAY_CRASH_FACTOR
+    return f
+
+
+def _crash_component(xy, cum, w, seg_factor=None):
     """Walk the line, sample the grid every STEP_M, length-weighted. -> (points, events)."""
     cells, cell_m, _ = _grid()
     seg_len = np.diff(cum)
@@ -161,15 +173,15 @@ def _crash_component(xy, cum, w):
         d = min(max(d, 0.0), total)
         i = min(int(np.searchsorted(cum, d, side="right")) - 1, len(seg_len) - 1)
         t = (d - cum[i]) / seg_len[i] if seg_len[i] > 0 else 0.0
-        return xy[i] + t * (xy[i + 1] - xy[i])
+        return xy[i] + t * (xy[i + 1] - xy[i]), i
 
     crash, hazards, flagged = 0.0, [], set()
     n = max(int(np.ceil(total / STEP_M)), 1)
     step = total / n
     for k in range(n):
         d = (k + 0.5) * step
-        x, y = at(d)
-        risk = _lookup(cells, cell_m, x, y)[0]
+        (x, y), i = at(d)
+        risk = _lookup(cells, cell_m, x, y)[0] * (seg_factor[i] if seg_factor is not None else 1.0)
         crash += risk * step / cell_m
         cell = (int(np.floor(x / cell_m)), int(np.floor(y / cell_m)))
         if risk >= HAZARD_CELL_RISK and cell not in flagged:
@@ -180,6 +192,12 @@ def _crash_component(xy, cum, w):
                                 description=f"High crash-density area (risk {risk:.2f})"))
     return crash * w["crash"], hazards
 
+
+# Raw crash counts over-penalise highways: they carry far more traffic, so a cell on I-35 has many
+# crashes without each trip being riskier per mile. Stretches GraphHopper reports as these road
+# classes get their grid crash risk scaled by this factor (maneuvers like merges are still penalised).
+HIGHWAY_CLASSES = {"motorway", "trunk"}
+HIGHWAY_CRASH_FACTOR = 0.6
 
 CURVE_STEP_M = 25.0         # resampling distance for curvature
 CURVE_MAX_STEP_DEG = 25.0   # a bigger heading change within one step is a corner, scored as a turn instead
@@ -198,7 +216,7 @@ def _curve_degrees(xy, cum):
     return float(delta[delta < CURVE_MAX_STEP_DEG].sum())
 
 
-def crash_risk(polyline, profile="car", precision=5):
+def crash_risk(polyline, profile="car", precision=5, road_classes=None):
     """Crash-grid risk only (no turn penalties): (points, [high_crash_zone events]).
 
     `polyline`: GeoJSON-order [[lng, lat], ...] (GraphHopper points_encoded=false), a GeoJSON
@@ -208,18 +226,18 @@ def crash_risk(polyline, profile="car", precision=5):
     xy, cum = _project(polyline, precision)
     if xy is None:
         return 0.0, []
-    score, hazards = _crash_component(xy, cum, w)
+    score, hazards = _crash_component(xy, cum, w, _segment_factors(len(xy), road_classes))
     return round(float(score), 3), hazards
 
 
-def score_route(polyline, profile="car", instructions=None, precision=5):
+def score_route(polyline, profile="car", instructions=None, precision=5, road_classes=None):
     """Crash risk + maneuver penalties. See module docstring. Returns (risk_score, hazards_list)."""
     w = PROFILES[_norm_profile(profile)]
     xy, cum = _project(polyline, precision)
     if xy is None:
         return 0.0, []
     cells, cell_m, _ = _grid()
-    score, hazards = _crash_component(xy, cum, w)
+    score, hazards = _crash_component(xy, cum, w, _segment_factors(len(xy), road_classes))
 
     # ---- ride comfort: smooth curving, for profiles that care ----
     curve_pts = w["curve"] * _curve_degrees(xy, cum)

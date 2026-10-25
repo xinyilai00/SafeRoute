@@ -174,11 +174,32 @@ def test_pick_safest_respects_min_gain_and_budget():
     tiny_gain = {"minutes": 11.0, "score": 98.0}
     big_gain = {"minutes": 11.0, "score": 70.0}
     too_slow = {"minutes": 15.0, "score": 10.0}
-    rules = {"max_detour": 1.25, "min_gain": 0.05}
+    rules = {"max_detour": 1.25, "min_gain": 0.05, "beta": 1.0}
     assert _pick_safest([fast, tiny_gain], fast, 1.0, rules) is fast      # not worth a detour
     assert _pick_safest([fast, big_gain, too_slow], fast, 1.0, rules) is big_gain
     assert _pick_safest([fast, big_gain], fast, 0.0, rules) is fast       # safety_weight 0
-    assert _pick_safest([fast, too_slow], fast, 1.0, {"max_detour": 1.6, "min_gain": 0.05}) is too_slow
+    assert _pick_safest([fast, too_slow], fast, 1.0, {**rules, "max_detour": 1.6}) is too_slow
+
+
+def test_pick_safest_keeps_the_faster_road_when_time_matters():
+    from app import _pick_safest
+    fast = {"minutes": 20.0, "score": 100.0}
+    slow_safe = {"minutes": 23.6, "score": 85.0}    # 18% slower for 15% less risk: not worth it
+    good_trade = {"minutes": 22.0, "score": 70.0}   # 10% slower for 30% less risk: worth it
+    rules = {"max_detour": 1.25, "min_gain": 0.03, "beta": 1.0}
+    assert _pick_safest([fast, slow_safe], fast, 1.0, rules) is fast
+    assert _pick_safest([fast, slow_safe, good_trade], fast, 1.0, rules) is good_trade
+    # a profile that pays more time for safety (beta 1.5) takes the slower one
+    assert _pick_safest([fast, slow_safe], fast, 1.0, {**rules, "beta": 2.0}) is slow_safe
+
+
+def test_highway_crash_risk_is_discounted():
+    n = len(DOWNTOWN_LINE := [[-97.7431, 30.2672 + i * 0.0002] for i in range(90)])
+    plain, _ = scoring.score_route(DOWNTOWN_LINE, "car")
+    hwy, hz = scoring.score_route(DOWNTOWN_LINE, "car", road_classes=[[0, n - 1, "motorway"]])
+    local, _ = scoring.score_route(DOWNTOWN_LINE, "car", road_classes=[[0, n - 1, "residential"]])
+    assert hwy < plain * 0.8 and local == plain
+    assert len(hz) <= len(scoring.score_route(DOWNTOWN_LINE, "car")[1])
 
 
 def test_route_rejects_outside_austin_and_same_point():

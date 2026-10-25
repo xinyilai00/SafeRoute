@@ -73,15 +73,19 @@ def health():
     return {"ok": True}
 
 
-# Per profile: how much slower the safest route may be, and the smallest risk drop worth a detour.
-# If the best alternative saves less than min_gain of the fastest route's risk, we just return the
-# fastest (fastest == safest) rather than make the driver lose minutes for nothing.
+# Per profile:
+#   max_detour: hard cap on how much slower the safest route may be.
+#   min_gain:   smallest risk drop worth a detour; below it the fastest is returned.
+#   beta:       how many percent of time a percent of risk is worth at safety_weight=1. Routes are
+#               ranked by cost = time/fastest_time + safety_weight * beta * risk/fastest_risk, so a
+#               detour must cut risk by more than it adds time (scaled by beta). beta 1 is an even
+#               trade; higher means the profile pays more time for safety.
 ROUTING_RULES = {
-    "teen": {"max_detour": 1.25, "min_gain": 0.05},
-    "elderly": {"max_detour": 1.35, "min_gain": 0.03},
-    "sensitive_passenger": {"max_detour": 1.30, "min_gain": 0.03},
+    "teen": {"max_detour": 1.20, "min_gain": 0.05, "beta": 1.0},
+    "elderly": {"max_detour": 1.30, "min_gain": 0.03, "beta": 1.5},
+    "sensitive_passenger": {"max_detour": 1.25, "min_gain": 0.03, "beta": 1.5},
 }
-DEFAULT_RULES = {"max_detour": 1.25, "min_gain": 0.05}
+DEFAULT_RULES = {"max_detour": 1.20, "min_gain": 0.05, "beta": 1.0}
 KM_PER_MILE = 1.609344
 # Event types allowed by the API contract; other hazards (roundabout, u_turn, crossing) still
 # add to risk_score but aren't listed, so the app never sees an unknown type.
@@ -121,11 +125,13 @@ def _summary(c):
 
 
 def _pick_safest(cands, fastest, w, rules):
-    """w=0 -> the fastest; w=1 -> lowest risk within the detour budget; between = blend.
-    Falls back to the fastest when the winner doesn't beat it by rules["min_gain"]."""
+    """Rank candidates within the detour cap by time + w*beta*risk (both relative to the fastest),
+    so highways and other faster roads are kept whenever the time they save outweighs their risk.
+    w=0 is the fastest. Falls back to the fastest when the winner saves < rules["min_gain"] risk."""
     ok = [c for c in cands if c["minutes"] <= fastest["minutes"] * rules["max_detour"]]
     fs = fastest["score"] or 1.0
-    best = min(ok, key=lambda c: (1 - w) * c["minutes"] / fastest["minutes"] + w * c["score"] / fs)
+    best = min(ok, key=lambda c: c["minutes"] / fastest["minutes"]
+               + w * rules["beta"] * c["score"] / fs)
     if fastest["score"] > 0 and (fastest["score"] - best["score"]) / fastest["score"] < rules["min_gain"]:
         return fastest
     return best
@@ -147,7 +153,8 @@ def route(req: RouteRequest):
         raise HTTPException(404, "no route found")
     try:
         for c in cands:
-            c["score"], c["hazards"] = score_route(c["coords"], req.profile, c["instructions"])
+            c["score"], c["hazards"] = score_route(c["coords"], req.profile, c["instructions"],
+                                                   road_classes=c.get("road_classes"))
     except ValueError as e:
         raise HTTPException(422, str(e))
 
