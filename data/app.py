@@ -161,8 +161,15 @@ def route(req: RouteRequest):
         summary = "Fastest route is also the safest (alternatives are not meaningfully safer)"
     else:
         lead = f"+{round(added)} min" if round(added) > 0 else "Same time"
-        summary = f"{lead}, " + (f"avoids {', '.join(avoided)}" if avoided
-                                 else "lower crash exposure")
+        turns = [a for a in avoided if "high-crash" not in a]
+        zones = next((a for a in avoided if "high-crash" in a), None)
+        parts = []
+        if turns:
+            parts.append(f"avoids {', '.join(turns)}")
+        if zones:
+            n = int(zones.split()[0])
+            parts.append(f"passes {n} fewer high-crash zone{'s' if n != 1 else ''}")
+        summary = f"{lead}, " + (" and ".join(parts) if parts else "lower crash exposure")
     body = {
         "fastest": _summary(fastest),
         "safest": _summary(safest),

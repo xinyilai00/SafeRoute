@@ -104,7 +104,8 @@ class GraphHopperProvider:
             "points_encoded": False,
             "ch.disable": True,  # alternatives don't work with CH
         }
-        r = httpx.post(f"{self.url}/route", json=body, timeout=self.timeout)
+        r = httpx.post(f"{self.url}/route", json=body, timeout=self.timeout,
+                       headers={"ngrok-skip-browser-warning": "true"})  # skips ngrok free-tier interstitial
         r.raise_for_status()
         out = []
         for p in r.json().get("paths", []):
