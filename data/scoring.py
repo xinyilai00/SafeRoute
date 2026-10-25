@@ -26,6 +26,8 @@ import numpy as np
 from pyproj import Transformer
 
 RISK_PATH = Path(__file__).parent / "risk.geojson"
+RATIOS_PATH = Path(__file__).parent / "profile_ratios.json"
+SIGNALS_PATH = Path(__file__).parent / "signals.json"
 STEP_M = 20.0  # sampling distance along the route
 
 # Per-profile weights. Accepts GraphHopper profile names too (car/bike/foot, etc.).
@@ -57,18 +59,28 @@ PROFILES = {
         crossing=1.5,       # any turn onto a fast road means crossing it
     ),
 }
-# App profiles (wire strings from the iOS app). All are drivers, so they start from "car".
+def _measured_ratio(profile, ctype):
+    """Measured collision-type ratio for a profile (profile_ratios.json), 1.0 if unavailable."""
+    try:
+        return json.loads(RATIOS_PATH.read_text())[profile]["ratios"][ctype]
+    except Exception:
+        return 1.0
+
+
+# App profiles (wire strings from the iOS app). All are drivers, so they start from "car". Their
+# differences are limited to what the data measures (calibrate_profiles.py):
+#  - teen / elderly crash risk comes from their own grid layers (risk_teen / risk_elderly), built
+#    from each group's measured collision-type mix;
+#  - left_crash is scaled by the group's measured left-turn ratio.
+# sensitive_passenger has no crash data behind it; its only difference is the ride-comfort curvature
+# penalty, which is an assumption, not a measurement. Other maneuver weights stay at the car baseline.
 PROFILES["teen"] = {**PROFILES["car"],
-                    "crash": 11.0, "merge": 2.5, "left_major": 3.5, "roundabout": 1.0,
-                    "quick_after_exit": 3.5}           # inexperienced: merges, fast lefts
+                    "left_crash": PROFILES["car"]["left_crash"] * _measured_ratio("teen", "left-turn")}
 PROFILES["elderly"] = {**PROFILES["car"],
-                       "crash": 11.0, "left": 2.5, "sharp_left": 3.5, "left_major": 4.0, "left_crash": 6.0,
-                       "merge": 2.0, "roundabout": 1.5, "u_turn": 3.0,
-                       "curve": 0.01}  # lefts and complexity
-PROFILES["sensitive_passenger"] = {**PROFILES["car"],
-                                   "crash": 12.0, "sharp_left": 3.5, "merge": 2.0,
-                                   "roundabout": 1.5, "u_turn": 3.0,
-                                   "curve": 0.03}    # smooth ride, fewer hard turns
+                       "left_crash": PROFILES["car"]["left_crash"] * _measured_ratio("elderly", "left-turn")}
+PROFILES["sensitive_passenger"] = {**PROFILES["car"], "curve": 0.03}
+# index into the grid cell tuple (risk, speed, left_risk, risk_teen, risk_elderly)
+PROFILE_LAYER = {"teen": 3, "elderly": 4}
 ALIASES = {"driving": "car", "auto": "car", "cycling": "bike", "bicycle": "bike",
            "walking": "foot", "pedestrian": "foot", "walk": "foot"}
 
@@ -92,7 +104,8 @@ def _grid():
     cells = {}
     for f in gj["features"]:
         p = f["properties"]
-        cells[(p["ix"], p["iy"])] = (p["risk"], p.get("speed") or 0.0, p.get("left_risk") or 0.0)
+        cells[(p["ix"], p["iy"])] = (p["risk"], p.get("speed") or 0.0, p.get("left_risk") or 0.0,
+                                     p.get("risk_teen", p["risk"]), p.get("risk_elderly", p["risk"]))
     return cells, cell_m, gj["grid"]["crs"]
 
 
@@ -140,7 +153,7 @@ def _norm_profile(profile: str) -> str:
 
 
 def _lookup(cells, cell_m, x, y):
-    return cells.get((int(np.floor(x / cell_m)), int(np.floor(y / cell_m))), (0.0, 0.0, 0.0))
+    return cells.get((int(np.floor(x / cell_m)), int(np.floor(y / cell_m))), (0.0, 0.0, 0.0, 0.0, 0.0))
 
 
 def _project(polyline, precision=5):
@@ -154,16 +167,36 @@ def _project(polyline, precision=5):
     return xy, np.concatenate([[0.0], np.cumsum(seg)])
 
 
-def _segment_factors(n_vertices, road_classes):
-    """Per-segment crash multiplier (1.0, or HIGHWAY_CRASH_FACTOR on motorway/trunk stretches)."""
+def _segment_factors(n_vertices, road_classes, road_environment=None):
+    """Per-segment crash multiplier: HIGHWAY_CRASH_FACTOR on motorway/trunk stretches,
+    BRIDGE_CRASH_FACTOR on bridges and tunnels (smaller wins), else 1.0."""
     f = np.ones(max(n_vertices - 1, 0))
     for a, b, kind in road_classes or []:
         if str(kind).lower() in HIGHWAY_CLASSES:
-            f[a:b] = HIGHWAY_CRASH_FACTOR
+            f[a:b] = np.minimum(f[a:b], HIGHWAY_CRASH_FACTOR)
+    for a, b, kind in road_environment or []:
+        if str(kind).lower() in BRIDGE_CLASSES:
+            f[a:b] = np.minimum(f[a:b], BRIDGE_CRASH_FACTOR)
     return f
 
 
-def _crash_component(xy, cum, w, seg_factor=None):
+@lru_cache(maxsize=1)
+def _signals():
+    """Active traffic signals as UTM metres, shape (n, 2); empty if signals.json is missing."""
+    try:
+        pts = json.loads(SIGNALS_PATH.read_text())
+    except Exception:
+        return np.empty((0, 2))
+    xs, ys = _to_utm().transform([p[0] for p in pts], [p[1] for p in pts])
+    return np.column_stack([xs, ys])
+
+
+def _signalized(x, y):
+    sig = _signals()
+    return bool(len(sig) and np.min(np.hypot(sig[:, 0] - x, sig[:, 1] - y)) <= SIGNAL_RADIUS_M)
+
+
+def _crash_component(xy, cum, w, seg_factor=None, layer=0):
     """Walk the line, sample the grid every STEP_M, length-weighted. -> (points, events)."""
     cells, cell_m, _ = _grid()
     seg_len = np.diff(cum)
@@ -181,7 +214,7 @@ def _crash_component(xy, cum, w, seg_factor=None):
     for k in range(n):
         d = (k + 0.5) * step
         (x, y), i = at(d)
-        risk = _lookup(cells, cell_m, x, y)[0] * (seg_factor[i] if seg_factor is not None else 1.0)
+        risk = _lookup(cells, cell_m, x, y)[layer] * (seg_factor[i] if seg_factor is not None else 1.0)
         crash += risk * step / cell_m
         cell = (int(np.floor(x / cell_m)), int(np.floor(y / cell_m)))
         if risk >= HAZARD_CELL_RISK and cell not in flagged:
@@ -198,6 +231,13 @@ def _crash_component(xy, cum, w, seg_factor=None):
 # classes get their grid crash risk scaled by this factor (maneuvers like merges are still penalised).
 HIGHWAY_CLASSES = {"motorway", "trunk"}
 HIGHWAY_CRASH_FACTOR = 0.6
+
+# Bridges and tunnels: the grid square under an overpass is mostly the road below (e.g. a street
+# bridge over I-35), so crash risk on those stretches is scaled down. Where a stretch is both a
+# highway and a bridge the smaller factor wins (they are not multiplied). An assumption, not measured.
+BRIDGE_CLASSES = {"bridge", "tunnel"}
+BRIDGE_CRASH_FACTOR = 0.5
+SIGNAL_RADIUS_M = 35.0      # a left turn this close to a traffic signal counts as signalized
 
 CURVE_STEP_M = 25.0         # resampling distance for curvature
 CURVE_MAX_STEP_DEG = 25.0   # a bigger heading change within one step is a corner, scored as a turn instead
@@ -216,28 +256,33 @@ def _curve_degrees(xy, cum):
     return float(delta[delta < CURVE_MAX_STEP_DEG].sum())
 
 
-def crash_risk(polyline, profile="car", precision=5, road_classes=None):
+def crash_risk(polyline, profile="car", precision=5, road_classes=None, road_environment=None):
     """Crash-grid risk only (no turn penalties): (points, [high_crash_zone events]).
 
     `polyline`: GeoJSON-order [[lng, lat], ...] (GraphHopper points_encoded=false), a GeoJSON
     LineString dict, or an encoded polyline string. NOT [lat, lng].
     """
-    w = PROFILES[_norm_profile(profile)]
+    name = _norm_profile(profile)
+    w = PROFILES[name]
     xy, cum = _project(polyline, precision)
     if xy is None:
         return 0.0, []
-    score, hazards = _crash_component(xy, cum, w, _segment_factors(len(xy), road_classes))
+    score, hazards = _crash_component(xy, cum, w, _segment_factors(len(xy), road_classes, road_environment),
+                                      PROFILE_LAYER.get(name, 0))
     return round(float(score), 3), hazards
 
 
-def score_route(polyline, profile="car", instructions=None, precision=5, road_classes=None):
+def score_route(polyline, profile="car", instructions=None, precision=5, road_classes=None,
+                road_environment=None):
     """Crash risk + maneuver penalties. See module docstring. Returns (risk_score, hazards_list)."""
-    w = PROFILES[_norm_profile(profile)]
+    name = _norm_profile(profile)
+    w = PROFILES[name]
     xy, cum = _project(polyline, precision)
     if xy is None:
         return 0.0, []
     cells, cell_m, _ = _grid()
-    score, hazards = _crash_component(xy, cum, w, _segment_factors(len(xy), road_classes))
+    score, hazards = _crash_component(xy, cum, w, _segment_factors(len(xy), road_classes, road_environment),
+                                      PROFILE_LAYER.get(name, 0))
 
     # ---- ride comfort: smooth curving, for profiles that care ----
     curve_pts = w["curve"] * _curve_degrees(xy, cum)
@@ -254,7 +299,7 @@ def score_route(polyline, profile="car", instructions=None, precision=5, road_cl
         start = (ins.get("interval") or [0, 0])[0]
         start = min(max(start, 0), len(xy) - 1)
         x, y = xy[start]
-        _, speed, left_risk = _lookup(cells, cell_m, x, y)
+        _, speed, left_risk = _lookup(cells, cell_m, x, y)[:3]
         street = (ins.get("street_name") or "").lower()
         text = (ins.get("text") or "").lower()
         fast = speed >= FAST_MPH or any(h in street for h in MAJOR_NAME_HINTS)
@@ -265,14 +310,17 @@ def score_route(polyline, profile="car", instructions=None, precision=5, road_cl
             if sign != SLIGHT_LEFT:
                 pts += w["left_crash"] * left_risk
                 hot = left_risk >= LEFT_HOT
-                if fast:
+                signalized = _signalized(x, y)
+                unprotected = fast and not signalized   # fast road, no traffic signal at the turn
+                if unprotected:
                     pts += w["left_major"]
-                if fast or hot:
+                if unprotected or hot:
                     kind = "left_turn_major"
                     desc = ("Left turn where left-turn crashes are common" if hot
-                            else "Left turn across a fast/major road")
+                            else "Left turn across a fast road with no traffic signal")
                 elif pts:
-                    kind, desc = "left_turn", "Left turn"
+                    kind = "left_turn"
+                    desc = "Left turn at a traffic signal" if signalized else "Left turn"
             elif pts:
                 kind, desc = "left_turn", "Left turn"
         elif sign in (KEEP_LEFT, KEEP_RIGHT):

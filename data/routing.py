@@ -151,7 +151,7 @@ class GraphHopperProvider:
             "ch.disable": True,  # alternatives don't work with CH
             # per-stretch road type (highway crash discount, avoid check); toll only when it's needed,
             # so a GraphHopper import without the toll value can't break ordinary requests
-            "details": ["road_class"] + (["toll"] if "tolls" in avoid else []),
+            "details": ["road_class", "road_environment"] + (["toll"] if "tolls" in avoid else []),
         }
         custom_model = build_custom_model(avoid, blocked)
         if custom_model:
@@ -166,6 +166,7 @@ class GraphHopperProvider:
                         "miles": p["distance"] / M_PER_MILE,
                         "instructions": p.get("instructions", []),
                         "road_classes": p.get("details", {}).get("road_class", []),
+                        "environments": p.get("details", {}).get("road_environment", []),
                         "tolls": p.get("details", {}).get("toll", [])})
         return out
 

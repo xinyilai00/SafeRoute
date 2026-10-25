@@ -36,7 +36,7 @@ ngrok http 8000
   `risk_score` but aren't listed.
 - Unknown profile -> 422; engine down -> 502.
 - `score_route(coords, profile, instructions)` takes GraphHopper's `route["points"]["coordinates"]` and `route["instructions"]`.
-  Per-profile weights are in `PROFILES` in `scoring.py`.
+  Per-profile weights are in `PROFILES` in `scoring.py` (profiles differ only by measured values; see above).
 
 ## Live traffic (TomTom, optional)
 
@@ -54,6 +54,20 @@ Set `TOMTOM_API_KEY` in the gitignored `.env`; without it everything below is sk
 - After routing, the chosen routes are checked: if more than 5% of a route is still on an avoided road type, the summary says "couldn't fully avoid ...".
 - Header `X-Avoid-Applied` lists what was actually applied (`none` if nothing). Fake routes ignore `avoid`.
 - On real Austin trips, avoiding highways costs a lot of time (Round Rock to UT: 22.8 to 37.7 min live); avoiding tolls costs little (36.9 to 38.9 min Cedar Park to the airport).
+
+## Profiles, signals and bridges (measured where possible)
+
+- **Teen and elderly are different because of data, not hand-set weights.** `calibrate_profiles.py` compares collision types in crashes with a teen driver (15-19, 422 crashes) or a driver 65+ (520 crashes) against all serious/fatal crashes, shrinks the ratios toward 1, and writes `profile_ratios.json`. `build_risk.py` uses them to build `risk_teen` and `risk_elderly` grid layers (per-type crash weights times those ratios), and `scoring.py` uses the matching layer. Findings: teens are over-represented in opposite-direction (x1.42 raw) and single-vehicle crashes and at night (x1.28), but not in left-turn crashes (x0.95); drivers 65+ in angle (x1.44) and left-turn (x1.14) crashes, and almost never at night (x0.44).
+- **Limits.** The victim table (xecs-rpy9) only covers serious and fatal crashes, so a per-square age grid would be mostly noise; only the global type ratios are used. The backtest (`python backtest.py`) shows the profile grids are no worse than the general one and no clearly better: teen 49.2% vs 49.2% of held-out crashes captured in the top 10% of squares, elderly 42.0% vs 40.7% (n = 61 and 81, so within noise). Night driving is a real measured difference but needs a departure time in the request, which isn't in the contract yet.
+- **Everything else is the car baseline** except `left_crash` (scaled by the measured left-turn ratio) and the sensitive-passenger curvature penalty, which has no data behind it (an assumption). The earlier hand-set teen/elderly maneuver weights were removed because nothing measured supports them.
+- **Signals.** `build_signals.py` writes `signals.json` (1,105 active traffic signals from Austin's signal table; pedestrian beacons excluded). A left turn within 35 m of a signal is "signalized"; a left on a fast road with no signal nearby is the "unprotected" case. A signal does not guarantee a protected arrow; the data doesn't say.
+- **Bridges and tunnels.** GraphHopper's `road_environment` detail marks them; crash risk there is scaled by 0.5 because the grid square under an overpass is mostly the road below. Where a stretch is also a highway the smaller factor wins. An assumption, not measured.
+
+## Where to get more data
+
+- **Traffic volumes (exposure):** TxDOT Roadway Inventory, annual ZIPs at https://www.txdot.gov/data-maps/roadway-inventory.html (2025: https://www.txdot.gov/content/dam/docs/division/tpp/roadway-inventory/2025.zip), and TxDOT traffic count maps at https://www.txdot.gov/data-maps/traffic-count-maps.html. Contents of the ZIP not yet checked; TxDOT says its GIS data may not be used commercially.
+- **Weather:** National Weather Service API, no key: https://www.weather.gov/documentation/services-web-api (active alerts: `https://api.weather.gov/alerts/active?point=30.27,-97.74`). Open-Meteo, free, no key for light use: https://open-meteo.com/en/docs. TomTom incidents (already used for closures) also include weather categories (fog, rain, ice, wind, flooding).
+- **Historical weather and lighting per crash:** TxDOT CRIS, https://www.txdot.gov/data-maps/crash-reports-records/crash-data-analysis-statistics.html (CRIS Query tool, or the Crash Data Request form for bulk).
 
 ## Method notes
 

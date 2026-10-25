@@ -366,10 +366,10 @@ def test_graphhopper_request_body(monkeypatch):
     gh = routing.GraphHopperProvider("http://gh.test")
     o, d = {"lat": 30.28, "lng": -97.73}, {"lat": 30.26, "lng": -97.74}
     gh.routes(o, d)
-    assert "custom_model" not in sent and sent["details"] == ["road_class"]
+    assert "custom_model" not in sent and sent["details"] == ["road_class", "road_environment"]
     assert sent["points"] == [[-97.73, 30.28], [-97.74, 30.26]] and sent["alternative_route.max_paths"] == 5
     gh.routes(o, d, avoid=["tolls"])
-    assert sent["details"] == ["road_class", "toll"] and sent["custom_model"]["priority"][0]["if"] == "toll == ALL"
+    assert sent["details"] == ["road_class", "road_environment", "toll"] and sent["custom_model"]["priority"][0]["if"] == "toll == ALL"
     gh.routes(o, d, blocked={"type": "Polygon", "coordinates": []}, avoid=["highways"])
     assert len(sent["custom_model"]["priority"]) == 2 and "areas" in sent["custom_model"]
 
@@ -462,3 +462,57 @@ def test_live_minutes_retries_once_on_rate_limit(monkeypatch):
     monkeypatch.setattr(httpx, "post", lambda url, **kw: (calls.append(1), httpx.Response(400, request=httpx.Request("POST", url)))[1])
     assert live.live_minutes([[-97.7, 30.2], [-97.71, 30.22]]) is None and len(calls) == 1   # 400: no retry
     live._eta_cache.clear()
+
+
+# ---------- measured profiles, signals, bridges ----------
+
+def test_profiles_differ_only_by_measured_things():
+    P = scoring.PROFILES
+    ratios = json.loads((Path(__file__).parent.parent / "profile_ratios.json").read_text())
+    assert P["teen"]["left_crash"] == pytest.approx(P["car"]["left_crash"] * ratios["teen"]["ratios"]["left-turn"])
+    assert P["elderly"]["left_crash"] == pytest.approx(P["car"]["left_crash"] * ratios["elderly"]["ratios"]["left-turn"])
+    ignore = {"left_crash", "curve"}
+    for name in ("teen", "elderly", "sensitive_passenger"):          # everything else is the car baseline
+        assert {k: v for k, v in P[name].items() if k not in ignore} == {k: v for k, v in P["car"].items() if k not in ignore}
+    assert P["sensitive_passenger"]["curve"] > 0 and P["teen"]["curve"] == P["elderly"]["curve"] == 0
+
+
+def test_teen_and_elderly_use_their_own_grid_layers():
+    gj = json.loads((Path(__file__).parent.parent / "risk.geojson").read_text())
+    f = max(gj["features"], key=lambda x: abs(x["properties"]["risk_teen"] - x["properties"]["risk_elderly"]))
+    p = f["properties"]
+    assert p["risk_teen"] != p["risk_elderly"]
+    ring = f["geometry"]["coordinates"][0]
+    lon = sum(c[0] for c in ring[:4]) / 4
+    lat = sum(c[1] for c in ring[:4]) / 4
+    line = [[lon - 0.0004, lat], [lon + 0.0004, lat]]
+    teen, _ = scoring.crash_risk(line, "teen")
+    eld, _ = scoring.crash_risk(line, "elderly")
+    car, _ = scoring.crash_risk(line, "car")
+    assert (teen > eld) == (p["risk_teen"] > p["risk_elderly"]) and car > 0
+
+
+def test_left_turn_signalized_vs_unsignalized():
+    sig = json.loads((Path(__file__).parent.parent / "signals.json").read_text())
+    assert len(sig) > 500
+    lon, lat = sig[0]
+    ins = [{"sign": -2, "interval": [0, 0], "street_name": "Test Pkwy", "distance": 100}]
+    # same fast street name, one turn at a signal, one far from any signal
+    at_signal, hz1 = scoring.score_route([[lon, lat], [lon + 0.0005, lat]], "car", ins)
+    no_signal, hz2 = scoring.score_route([[-98.05, 30.70], [-98.0495, 30.70]], "car", ins)
+    lefts = [h for h in hz1 if h["type"].startswith("left_turn")]
+    assert lefts and not any("no traffic signal" in h["description"] for h in lefts)   # signalized: not "unprotected"
+    assert any(h["type"] == "left_turn_major" and "no traffic signal" in h["description"] for h in hz2)
+    assert scoring._signalized(*scoring._signals()[0]) and not scoring._signalized(*scoring._to_utm().transform(-98.05, 30.70))
+
+
+def test_bridge_discount_and_min_rule():
+    f = scoring._segment_factors(11, [[0, 4, "motorway"]], [[2, 8, "bridge"], [8, 10, "tunnel"]])
+    assert f[0] == f[1] == scoring.HIGHWAY_CRASH_FACTOR           # highway only
+    assert f[2] == f[3] == min(scoring.HIGHWAY_CRASH_FACTOR, scoring.BRIDGE_CRASH_FACTOR)  # both: smaller wins, not product
+    assert f[5] == scoring.BRIDGE_CRASH_FACTOR and f[8] == scoring.BRIDGE_CRASH_FACTOR
+    line = [[-97.7431, 30.2672 + i * 0.0002] for i in range(60)]
+    n = len(line)
+    plain, _ = scoring.score_route(line, "car")
+    over, _ = scoring.score_route(line, "car", road_environment=[[0, n - 1, "bridge"]])
+    assert over < plain * 0.7

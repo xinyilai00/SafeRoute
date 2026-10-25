@@ -53,6 +53,38 @@ def smooth(g, alpha: float):
     return cells
 
 
+def profile_backtest(train_until):
+    """Do the teen/elderly grids predict LATER crashes of that age group better than the general grid?
+
+    Only serious/fatal crashes have a known driver age, so the held-out sets are small (see n); treat
+    the result as a sanity check, not proof.
+    """
+    import csv
+    import calibrate_profiles as cp
+    if not cp.PERSONS_PATH.exists():
+        cp.fetch_persons(cp.PERSONS_PATH)
+    crashes = b.load_crashes(b.CSV_PATH)
+    train = crashes[crashes["date"].dt.year <= train_until]
+    test = crashes[crashes["date"].dt.year > train_until].copy()
+    test["cell"] = _cells(test)
+    persons = list(csv.DictReader(open(cp.PERSONS_PATH)))
+    mult = b.load_profile_multipliers()
+    grid = b.build_grid(train)
+    base_n = len(grid)
+    print(f"\n{'profile grid vs general (held-out crashes with a driver of that age)':70s}")
+    print(f"{'group':10s} {'n test':>7s} {'general cap@10%':>16s} {'profile cap@10%':>16s}")
+    for group, (lo, hi) in cp.GROUPS.items():
+        if group not in mult:
+            continue
+        ids = {p["crash_pk"] for p in persons if p["is_primary_person"] == "true" and p["prsn_age"].isdigit()
+               and lo <= int(p["prsn_age"]) <= hi}
+        sub = test[test["id"].astype(str).isin(ids)]
+        counts = sub.groupby("cell").size()
+        col = f"risk_{group}"
+        print(f"{group:10s} {len(sub):7d} {_capture(_series(grid, 'risk'), counts, .10, base_n):16.1%} "
+              f"{_capture(_series(grid, col), counts, .10, base_n):16.1%}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--train-until", type=int, default=2023)
@@ -104,6 +136,8 @@ def main():
         rho = both.iloc[:, 0].rank().corr(both.iloc[:, 1].rank())
         print(f"{name:26s} {_capture(s_, test_n, .05, base_n):9.1%} {_capture(s_, test_n, .10, base_n):10.1%} "
               f"{_capture(s_, test_cost, .10, base_n):13.1%} {rho:9.3f}")
+
+    profile_backtest(args.train_until)
 
     g = schemes["cost-weighted (default)"]
     overall, left = _series(g, "risk"), _series(g, "left_risk")

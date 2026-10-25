@@ -1,0 +1,77 @@
+{
+  "baseline": {
+    "crashes": 8254,
+    "share": {
+      "left-turn": 0.18451659801308457,
+      "single-vehicle": 0.4273079718924158,
+      "rear-end/stopped": 0.0760843227526048,
+      "angle": 0.14405136903319601,
+      "opposite-direction": 0.035013326871819725,
+      "other": 0.1330264114368791
+    }
+  },
+  "shrink_k": 20.0,
+  "note": "ratios = shrunk (observed+k)/(expected+k) of collision-type share vs all serious/fatal crashes",
+  "teen": {
+    "age_range": [
+      15,
+      19
+    ],
+    "crashes": 422,
+    "counts": {
+      "left-turn": 74,
+      "single-vehicle": 201,
+      "rear-end/stopped": 19,
+      "angle": 55,
+      "opposite-direction": 21,
+      "other": 52
+    },
+    "raw_ratios": {
+      "left-turn": 0.95,
+      "single-vehicle": 1.115,
+      "rear-end/stopped": 0.592,
+      "angle": 0.905,
+      "opposite-direction": 1.421,
+      "other": 0.926
+    },
+    "ratios": {
+      "left-turn": 0.96,
+      "single-vehicle": 1.103,
+      "rear-end/stopped": 0.748,
+      "angle": 0.928,
+      "opposite-direction": 1.179,
+      "other": 0.946
+    }
+  },
+  "elderly": {
+    "age_range": [
+      65,
+      120
+    ],
+    "crashes": 520,
+    "counts": {
+      "left-turn": 109,
+      "single-vehicle": 185,
+      "rear-end/stopped": 39,
+      "angle": 108,
+      "opposite-direction": 15,
+      "other": 64
+    },
+    "raw_ratios": {
+      "left-turn": 1.136,
+      "single-vehicle": 0.833,
+      "rear-end/stopped": 0.986,
+      "angle": 1.442,
+      "opposite-direction": 0.824,
+      "other": 0.925
+    },
+    "ratios": {
+      "left-turn": 1.113,
+      "single-vehicle": 0.846,
+      "rear-end/stopped": 0.991,
+      "angle": 1.349,
+      "opposite-direction": 0.916,
+      "other": 0.942
+    }
+  }
+}

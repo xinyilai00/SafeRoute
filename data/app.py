@@ -209,7 +209,8 @@ def route(req: RouteRequest):
     try:
         for c in cands:
             c["score"], c["hazards"] = score_route(c["coords"], req.profile, c["instructions"],
-                                                   road_classes=c.get("road_classes"))
+                                                   road_classes=c.get("road_classes"),
+                                                   road_environment=c.get("environments"))
     except ValueError as e:
         raise HTTPException(422, str(e))
 

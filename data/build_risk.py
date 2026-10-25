@@ -31,6 +31,34 @@ UTM = "EPSG:32614"  # UTM zone 14N, metres; covers Austin
 # Sanity box so geocoding junk (0,0 etc.) and far-flung rows don't stretch the grid.
 LON_RANGE, LAT_RANGE = (-98.1, -97.3), (29.95, 30.75)
 
+# Collision-type groups from `collsn_desc`; used for the profile-specific grids (see calibrate_profiles.py).
+TYPES = ("left-turn", "single-vehicle", "rear-end/stopped", "angle", "opposite-direction", "other")
+PROFILE_RATIOS_PATH = HERE / "profile_ratios.json"
+
+
+def crash_type(desc) -> str:
+    d = str(desc or "").upper()
+    if "LEFT TURN" in d or "TURNING LEFT" in d:
+        return "left-turn"
+    if d.startswith("ONE MOTOR VEHICLE"):
+        return "single-vehicle"
+    if "REAR-END" in d or "ONE STRAIGHT-ONE STOPPED" in d:
+        return "rear-end/stopped"
+    if d.startswith("ANGLE"):
+        return "angle"
+    if d.startswith("OPPOSITE"):
+        return "opposite-direction"
+    return "other"
+
+
+def load_profile_multipliers() -> dict:
+    """{"teen": {type: multiplier}, "elderly": {...}} from profile_ratios.json, or {} if not built yet."""
+    if not PROFILE_RATIOS_PATH.exists():
+        return {}
+    ratios = json.loads(PROFILE_RATIOS_PATH.read_text())
+    return {p: {t: ratios[p]["ratios"][t] for t in TYPES} for p in ("teen", "elderly") if p in ratios}
+
+
 # CRIS crash_sev_id: 4 killed, 1 suspected serious, 2 non-incapacitating,
 # 3 possible injury, 5 not injured, 0 unknown. Used with --weights severity.
 SEVERITY_WEIGHT = {4: 10.0, 1: 6.0, 2: 2.0, 3: 1.0, 5: 0.5, 0: 0.5}
@@ -74,6 +102,7 @@ def load_crashes(path: Path, since: int | None = None, until: int | None = None,
         age = df["date"].dt.year.max() - df["date"].dt.year
         df["weight"] = df["weight"] * 0.5 ** (age / halflife)
     df["is_left"] = df["collsn_desc"].fillna("").str.contains(LEFT_TURN_RE)
+    df["ctype"] = df["collsn_desc"].map(crash_type)
 
     gdf = gpd.GeoDataFrame(
         df, geometry=gpd.points_from_xy(df["longitude"], df["latitude"]), crs="EPSG:4326"
@@ -98,6 +127,20 @@ def build_grid(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
              speed=("speed", "median"))
         .reset_index()
     )
+    # Per collision type weighted sums, for the teen / elderly layers
+    by_type = (
+        pd.DataFrame({"ix": ix, "iy": iy, "ctype": gdf["ctype"].values, "weight": gdf["weight"].values})
+        .pivot_table(index=["ix", "iy"], columns="ctype", values="weight", aggfunc="sum", fill_value=0.0)
+        .reindex(columns=list(TYPES), fill_value=0.0)
+        .reset_index()
+    )
+    cells = cells.merge(by_type, on=["ix", "iy"], how="left")
+    for profile, mult in load_profile_multipliers().items():
+        w_profile = sum(cells[t] * mult[t] for t in TYPES)
+        scaled_p = np.log1p(w_profile)
+        cells[f"risk_{profile}"] = (scaled_p / scaled_p.max()).round(4)
+    cells = cells.drop(columns=list(TYPES))
+
     # Raw sums are heavy-tailed (a few downtown/highway cells dominate), so scale on log
     # before normalising or the heatmap would be one red dot on a blue map.
     scaled = np.log1p(cells["weighted"])
