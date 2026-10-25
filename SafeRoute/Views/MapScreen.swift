@@ -249,10 +249,7 @@ struct MapScreen: View {
                 model.swapEndpoints(userLocation: locationManager.location)
                 findRoute()
             },
-            onClear: {
-                model.clearDestination()
-                recenterOnUser()
-            }
+            onClear: clearRoute
         )
         .padding(.horizontal, 16)
         .padding(.top, 8)
@@ -260,36 +257,58 @@ struct MapScreen: View {
 
     // MARK: - Bottom panel
 
-    private var bottomPanel: some View {
-        VStack(alignment: .trailing, spacing: 12) {
-            // One glass cluster: the controls merge visually when they sit this close.
-            GlassEffectContainer(spacing: 12) {
-                HStack(spacing: 12) {
-                    if model.isRiskGridAvailable {
-                        heatmapToggle
-                    }
-                    recenterButton
-                }
-            }
+    /// Space left between the card and the controls floating above it, where MapKit draws its attribution.
+    private let attributionGap: CGFloat = 28
 
-            if model.destination != nil {
-                if let result = model.result {
-                    RouteSummaryCard(
-                        result: result,
-                        isReloading: model.isLoading,
-                        onStart: { startDrive(simulated: false) },
-                        onSimulate: { startDrive(simulated: true) },
-                        isPreview: !model.startsAtUserLocation
-                    )
-                } else if model.isOutsideCoverage {
-                    coverageCard
-                } else if model.isLoading {
-                    loadingCard
+    /// With a route up, the card is the only thing that insets the map, so MapKit's "Apple Maps" / "Legal"
+    /// attribution sits right above the card as in Apple Maps. The Risk map and recenter controls float above
+    /// the card as an overlay, outside the inset; without a route they are the inset themselves.
+    @ViewBuilder
+    private var bottomPanel: some View {
+        if model.destination != nil, model.result != nil || model.isOutsideCoverage || model.isLoading {
+            routeCard
+                .overlay(alignment: .topTrailing) {
+                    controlsRow
+                        .alignmentGuide(.top) { $0[.bottom] + attributionGap }
                 }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+        } else {
+            controlsRow
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+        }
+    }
+
+    @ViewBuilder
+    private var routeCard: some View {
+        if let result = model.result {
+            RouteSummaryCard(
+                result: result,
+                isReloading: model.isLoading,
+                onStart: { startDrive(simulated: false) },
+                onSimulate: { startDrive(simulated: true) },
+                isPreview: !model.startsAtUserLocation,
+                onDismiss: isDriving ? nil : Optional(clearRoute)
+            )
+        } else if model.isOutsideCoverage {
+            coverageCard
+        } else {
+            loadingCard
+        }
+    }
+
+    /// One glass cluster: the controls merge visually when they sit this close.
+    private var controlsRow: some View {
+        GlassEffectContainer(spacing: 12) {
+            HStack(spacing: 12) {
+                if model.isRiskGridAvailable {
+                    heatmapToggle
+                }
+                recenterButton
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 8)
     }
 
     private var recenterButton: some View {
@@ -368,6 +387,12 @@ struct MapScreen: View {
             from: locationManager.coordinate,
             avoiding: AvoidOptions(tolls: avoidTolls, highways: avoidHighways)
         )
+    }
+
+    /// Back to the neutral state: the search field's x and pulling the card down both land here.
+    private func clearRoute() {
+        model.clearDestination()
+        recenterOnUser()
     }
 
     /// Re-requests with the current profile and options if a route is showing or being fetched.
