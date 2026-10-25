@@ -17,6 +17,10 @@ Owner: Xinyi. Read the root `CLAUDE.md` first (product, API contract, folder own
 - Don't commit `raw/`, `.venv/`, or any `.env`. `risk.geojson` is small enough to commit and is the only data artifact the team needs.
 - Changing a contract field name means telling everyone and updating the root `CLAUDE.md` in the same commit.
 
+## Keeping it current
+
+`python refresh.py` (see README) downloads fresh data, rebuilds, and keeps the result only if the gate passes. `.github/workflows/data-refresh.yml` runs it weekly and opens a PR. Don't change the gate thresholds in `refresh.py` without telling the team.
+
 ## Run
 
 ```bash

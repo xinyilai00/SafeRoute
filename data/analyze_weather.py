@@ -14,6 +14,7 @@ effect is likely larger than the ratio shown. One airport station stands in for 
 """
 import json
 import math
+from datetime import date
 import urllib.request
 from pathlib import Path
 
@@ -26,11 +27,20 @@ HERE = Path(__file__).parent
 WEATHER_DIR = HERE / "raw" / "weather"
 OUT_PATH = HERE / "weather_effect.json"
 BASE = "https://noaa-ghcnh-pds.s3.us-east-1.amazonaws.com/hourly/access/by-year/{y}/psv/GHCNh_USW00013904_{y}.psv"
-YEARS = range(2014, 2026)  # complete years only
+LAST_YEAR = date.today().year - 1       # complete years only
+YEARS = range(2014, LAST_YEAR + 1)
 WET_CODES = ("RA", "DZ", "TS", "SN", "SH", "GR", "PL", "FZ", "-RA", "-DZ", "+RA")
 LOW_VIS_MILES = 3.0
 FREEZING_C = 0.0
 SHRINK_K = 20.0
+
+
+def needed() -> bool:
+    """True when weather_effect.json is missing or doesn't yet include the latest complete year."""
+    try:
+        return json.loads(OUT_PATH.read_text())["years"][1] < LAST_YEAR
+    except Exception:
+        return True
 
 
 def fetch(year: int) -> Path:
@@ -55,7 +65,7 @@ def hourly_conditions() -> pd.DataFrame:
     df["lowvis"] = df["visibility"] < LOW_VIS_MILES
     df["freezing"] = df["temperature"] <= FREEZING_C
     g = df.groupby("hour").agg(wet=("wet", "max"), lowvis=("lowvis", "max"), freezing=("freezing", "max"))
-    full = pd.date_range("2014-01-01", "2025-12-31 23:00", freq="h", tz="UTC")
+    full = pd.date_range("2014-01-01", f"{LAST_YEAR}-12-31 23:00", freq="h", tz="UTC")
     g = g.reindex(full)
     g[["wet", "lowvis", "freezing"]] = g[["wet", "lowvis", "freezing"]].fillna(False).astype(bool)
     return g
@@ -68,7 +78,7 @@ def crash_hours() -> pd.DataFrame:
     ts = local.dt.tz_localize("America/Chicago", ambiguous="NaT", nonexistent="NaT")
     df["hour"] = ts.dt.tz_convert("UTC").dt.floor("h")
     df = df.dropna(subset=["hour"])
-    df = df[(df["hour"] >= "2014-01-01") & (df["hour"] < "2026-01-01")]
+    df = df[(df["hour"] >= "2014-01-01") & (df["hour"] < f"{LAST_YEAR + 1}-01-01")]
     df["ctype"] = df["collsn_desc"].map(b.crash_type)
     df["ksi"] = df["crash_sev_id"].isin([1, 4])
     return df
@@ -95,7 +105,7 @@ def main() -> None:
     crashes = crash_hours()
     print(f"{len(crashes):,} crashes, {len(hours):,} hours; wet {hours['wet'].mean():.1%}, "
           f"low-vis {hours['lowvis'].mean():.1%}, freezing {hours['freezing'].mean():.1%}")
-    out = {"station": "USW00013904 (Austin-Bergstrom)", "years": [2014, 2025], "shrink_k": SHRINK_K,
+    out = {"station": "USW00013904 (Austin-Bergstrom)", "years": [2014, LAST_YEAR], "shrink_k": SHRINK_K,
            "note": "crashes per hour vs dry hours at the same local hour-of-day and weekday/weekend; not per vehicle-mile",
            "shares_of_hours": {k: round(float(hours[k].mean()), 4) for k in ("wet", "lowvis", "freezing")}}
     series = {"all": crashes.groupby("hour").size(), "ksi": crashes[crashes["ksi"]].groupby("hour").size()}

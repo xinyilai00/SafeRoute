@@ -55,6 +55,25 @@ Set `TOMTOM_API_KEY` in the gitignored `.env`; without it everything below is sk
 - Header `X-Avoid-Applied` lists what was actually applied (`none` if nothing). Fake routes ignore `avoid`.
 - On real Austin trips, avoiding highways costs a lot of time (Round Rock to UT: 22.8 to 37.7 min live); avoiding tolls costs little (36.9 to 38.9 min Cedar Park to the airport).
 
+## Self-updating pipeline (`refresh.py`)
+
+One command keeps the data current and refuses to ship a worse model:
+
+```bash
+cd data && .venv/bin/python refresh.py             # download, rebuild, check, keep or roll back
+.venv/bin/python refresh.py --dry-run              # everything, then restore the old files (writes nothing)
+.venv/bin/python refresh.py --skip-download        # rebuild from the files already in raw/
+```
+
+1. **Download and rebuild** (all public, keyless sources): new crashes and victim records, signals, pavement, and the profile ratios and risk grid. The weather effect is only recomputed when a new calendar year has completed.
+2. **Forward check:** crashes that arrived since the last build are genuinely new to the old grid. The share landing in the old grid's top 10% of squares is logged to `history.json` (chance is 10%). On a real test, a grid built months earlier put 59-60% of the later crashes in its top 10%, steady across 3, 6 and 12 months. It only warns (a change in the world isn't a reason to reject a rebuild).
+3. **Gate** (fixed numeric thresholds at the top of `refresh.py`, never a language model). The rebuild is accepted only if: the grid is structurally sound and a similar size, it correlates >= 0.95 with the previous grid, a rolling backtest (train through two years ago) captures >= 50% and hasn't dropped more than 3 points, the 200-trip route evaluation re-scored offline from `eval/trips.json.gz` (no GraphHopper or TomTom needed) still shows the safest route cutting held-out crashes by >= 2% with route-score agreement >= 55%, and the unit tests pass.
+4. **Accepted:** new files stay, `history.json` and `eval/REFRESH_REPORT.md` are updated. **Rejected:** every file is restored and the reasons are logged.
+
+`.github/workflows/data-refresh.yml` runs this every Monday (and on demand from the Actions tab) and opens a pull request with the report; a person merges it. One-time setup: Settings > Actions > General > tick "Allow GitHub Actions to create and approve pull requests". Scheduled runs only fire once the workflow file is on `main`.
+
+`risk.geojson` now carries a `meta` member (data cutoff, build time, crash count) so CI can tell which crashes are new without the old download. This keeps the data current and catches drift; it cannot guarantee better routes, since new crash data arrives gradually.
+
 ## Profiles, signals and bridges (measured where possible)
 
 - **Teen and elderly are different because of data, not hand-set weights.** `calibrate_profiles.py` compares collision types in crashes with a teen driver (15-19, 422 crashes) or a driver 65+ (520 crashes) against all serious/fatal crashes, shrinks the ratios toward 1, and writes `profile_ratios.json`. `build_risk.py` uses them to build `risk_teen` and `risk_elderly` grid layers (per-type crash weights times those ratios), and `scoring.py` uses the matching layer. Findings: teens are over-represented in opposite-direction (x1.42 raw) and single-vehicle crashes and at night (x1.28), but not in left-turn crashes (x0.95); drivers 65+ in angle (x1.44) and left-turn (x1.14) crashes, and almost never at night (x0.44).

@@ -1,0 +1,27 @@
+{
+  "trips": 200,
+  "cases": 600,
+  "held_out_crashes": 32182,
+  "pair_concordance": 0.6285,
+  "rank_corr": 0.2869,
+  "profiles": {
+    "elderly": {
+      "changed_share": 0.225,
+      "minutes_added": 0.3693,
+      "held_change_pct": -4.826,
+      "ksi_change_pct": -5.522
+    },
+    "sensitive_passenger": {
+      "changed_share": 0.195,
+      "minutes_added": 0.2811,
+      "held_change_pct": -3.797,
+      "ksi_change_pct": -4.904
+    },
+    "teen": {
+      "changed_share": 0.175,
+      "minutes_added": 0.2258,
+      "held_change_pct": -4.111,
+      "ksi_change_pct": -4.945
+    }
+  }
+}

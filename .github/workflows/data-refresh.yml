@@ -1,0 +1,64 @@
+# Weekly data refresh for data/: pulls new crashes, rebuilds the risk grid and friends, checks the result with
+# fixed numeric thresholds (data/refresh.py), and opens a pull request if it is accepted. A person merges it.
+#
+# One-time setup: Settings > Actions > General > Workflow permissions > tick
+# "Allow GitHub Actions to create and approve pull requests".
+# Scheduled runs only fire from the default branch (main); use "Run workflow" to start one by hand.
+name: Data refresh
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"   # Mondays 09:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: data/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r data/requirements.txt
+
+      - name: Refresh, validate, accept or reject
+        id: refresh
+        working-directory: data
+        run: python refresh.py --ci
+
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: refresh-report
+          path: data/eval/REFRESH_REPORT.md
+          if-no-files-found: ignore
+
+      - name: Open a pull request with the refreshed data
+        if: steps.refresh.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="auto/data-refresh-${{ github.run_id }}"
+          git config user.name "saferoute-refresh-bot"
+          git config user.email "saferoute-refresh-bot@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add data/risk.geojson data/profile_ratios.json data/signals.json data/street_condition.json \
+                  data/weather_effect.json data/history.json data/eval/results.csv data/eval/REPORT.md \
+                  data/eval/metrics.json data/eval/REFRESH_REPORT.md
+          git commit -m "Data refresh $(date -u +%F)"
+          git push origin "$BRANCH"
+          gh pr create --base main --head "$BRANCH" \
+            --title "Data refresh $(date -u +%F)" \
+            --body-file data/eval/REFRESH_REPORT.md \
+            || echo "Could not open the PR (is 'Allow GitHub Actions to create pull requests' enabled?). Branch pushed: $BRANCH"

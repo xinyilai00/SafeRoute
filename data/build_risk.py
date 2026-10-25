@@ -9,6 +9,7 @@ Pipeline: crashes -> UTM 14N (metres) -> 200 m cells -> weighted sum per cell
 """
 import argparse
 import json
+from datetime import datetime, timezone
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -75,7 +76,9 @@ def download(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     query = urllib.parse.urlencode({"$select": COLUMNS, "$limit": 1_000_000})
     print(f"downloading {CSV_URL} ...")
-    urllib.request.urlretrieve(f"{CSV_URL}?{query}", path)
+    tmp = path.with_suffix(".tmp")  # download to a temp file so a failed download never leaves a half-written CSV
+    urllib.request.urlretrieve(f"{CSV_URL}?{query}", tmp)
+    tmp.replace(path)
     print(f"saved {path} ({path.stat().st_size / 1e6:.1f} MB)")
 
 
@@ -180,6 +183,9 @@ def main() -> None:
     gj = json.loads(grid.to_json(drop_id=True, na="null", to_wgs84=True))
     # foreign member so consumers can index cells without geometry math
     gj["grid"] = {"cell_m": CELL_M, "crs": UTM}
+    # provenance, used by refresh.py to find which crashes are newer than this grid
+    gj["meta"] = {"data_through": crashes["date"].max().isoformat(), "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                  "crashes": int(len(crashes)), "cells": int(len(grid)), "halflife": args.halflife, "weights": args.weights}
     OUT_PATH.write_text(json.dumps(gj, separators=(",", ":")))
     print(f"wrote {OUT_PATH} ({len(grid):,} non-empty cells, "
           f"{OUT_PATH.stat().st_size / 1e6:.1f} MB)")

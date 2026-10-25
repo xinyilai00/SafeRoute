@@ -35,7 +35,9 @@ def fetch_persons(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     query = urllib.parse.urlencode({
         "$select": "crash_pk,prsn_age,is_primary_person,is_deleted", "$limit": 2_000_000})
-    urllib.request.urlretrieve(f"{PERSONS_URL}?{query}", path)
+    tmp = path.with_suffix(".tmp")
+    urllib.request.urlretrieve(f"{PERSONS_URL}?{query}", tmp)
+    tmp.replace(path)
 
 
 def main() -> None:

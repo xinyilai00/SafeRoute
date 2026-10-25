@@ -1,0 +1,54 @@
+[
+ {
+  "date": "2026-10-25T06:52:56+00:00",
+  "data_through": "2026-10-09T04:04:00",
+  "crashes": 232847,
+  "cells": 9622,
+  "forward": {
+   "n": 0,
+   "capture": null,
+   "ci": [
+    0,
+    1
+   ],
+   "hits": 0
+  },
+  "new_crashes_note": "crash ids not present in the previous download",
+  "backtest": 0.589,
+  "backtest_detail": {
+   "train_until": 2024,
+   "test_crashes": 20101,
+   "capture10": 0.589
+  },
+  "route": {
+   "trips": 200,
+   "cases": 600,
+   "held_out_crashes": 32182,
+   "pair_concordance": 0.6285,
+   "rank_corr": 0.2869,
+   "profiles": {
+    "elderly": {
+     "changed_share": 0.225,
+     "minutes_added": 0.3693,
+     "held_change_pct": -4.826,
+     "ksi_change_pct": -5.522
+    },
+    "sensitive_passenger": {
+     "changed_share": 0.195,
+     "minutes_added": 0.2811,
+     "held_change_pct": -3.797,
+     "ksi_change_pct": -4.904
+    },
+    "teen": {
+     "changed_share": 0.175,
+     "minutes_added": 0.2258,
+     "held_change_pct": -4.111,
+     "ksi_change_pct": -4.945
+    }
+   }
+  },
+  "tests": "63 passed, 2 warnings in 3.56s",
+  "similarity": 1.0,
+  "status": "accepted"
+ }
+]

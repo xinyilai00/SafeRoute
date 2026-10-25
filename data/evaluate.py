@@ -25,6 +25,7 @@ corridors. This is one city and about 2.8 years of held-out crashes.
 """
 import argparse
 import csv
+import gzip
 import json
 import math
 import random
@@ -45,6 +46,7 @@ import scoring
 HERE = Path(__file__).parent
 RAW = HERE / "raw" / "eval"
 OUT = HERE / "eval"
+TRIPS_GZ = OUT / "trips.json.gz"  # compact copy of the fetched routes, committed so CI can re-score them
 TRAIN_UNTIL = 2023
 BUFFER_M = 30.0
 PROFILES = ("teen", "elderly", "sensitive_passenger")
@@ -205,6 +207,52 @@ def sign_test(wins: int, losses: int) -> float:
     return min(1.0, 2 * sum(math.comb(n, i) for i in range(k + 1)) / 2 ** n)
 
 
+def validity(cd: pd.DataFrame):
+    """(per-trip rank correlations, concordant pairs, tied pairs, comparable pairs) between a candidate's
+    model score and its held-out crashes, over trips with 3+ candidates."""
+    rhos, agree, ties, pairs = [], 0, 0, 0
+    for _, g in cd.groupby("trip"):
+        if len(g) < 3:
+            continue
+        if g.model.nunique() > 1 and g.held.nunique() > 1:
+            rhos.append(g.model.rank().corr(g.held.rank()))
+        for i in range(len(g)):
+            for j in range(i + 1, len(g)):
+                a, c = g.iloc[i], g.iloc[j]
+                if a.model == c.model or a.held == c.held:
+                    ties += 1
+                    continue
+                pairs += 1
+                agree += (a.model < c.model) == (a.held < c.held)
+    return rhos, agree, ties, pairs
+
+
+def compute_metrics(df: pd.DataFrame, held_n: int) -> dict:
+    """Headline numbers as plain JSON; refresh.py compares these with the previous run."""
+    rhos, agree, ties, pairs = validity(pd.DataFrame(cand_rows))
+    out = {"trips": int(df.trip.nunique()), "cases": int(len(df)), "held_out_crashes": int(held_n),
+           "pair_concordance": round(agree / pairs, 4) if pairs else None,
+           "rank_corr": round(float(np.mean(rhos)), 4) if rhos else None, "profiles": {}}
+    for prof, d in df.groupby("profile"):
+        out["profiles"][prof] = {
+            "changed_share": round(float((~d.same).mean()), 4),
+            "minutes_added": round(float((d.ours_min - d.fast_min).mean()), 4),
+            "held_change_pct": round(100 * float((d.ours_held.sum() - d.fast_held.sum()) / d.fast_held.sum()), 3),
+            "ksi_change_pct": round(100 * float((d.ours_held_ksi.sum() - d.fast_held_ksi.sum()) / max(d.fast_held_ksi.sum(), 1)), 3)}
+    return out
+
+
+def load_cached_trips():
+    """Fetched routes: the local raw cache if present, else the committed gzip copy, else None."""
+    cache = RAW / "trips.json"
+    if cache.exists():
+        return json.loads(cache.read_text())
+    if TRIPS_GZ.exists():
+        with gzip.open(TRIPS_GZ, "rt") as f:
+            return json.load(f)
+    return None
+
+
 def summarize(df: pd.DataFrame, held_n: int) -> str:
     rng = np.random.default_rng(SEED)
     L = []
@@ -246,21 +294,7 @@ def summarize(df: pd.DataFrame, held_n: int) -> str:
           f"held-out crashes (ours: {dt.mean():+.2f} min, {100 * dh.sum() / d.fast_held.sum():+.1f}%).")
         w("")
     w("### Does the route-level model score predict later crashes? (independent check)")
-    cd = pd.DataFrame(cand_rows)
-    rhos, agree, ties, pairs = [], 0, 0, 0
-    for _, g in cd.groupby("trip"):
-        if len(g) < 3:
-            continue
-        if g.model.nunique() > 1 and g.held.nunique() > 1:
-            rhos.append(g.model.rank().corr(g.held.rank()))
-        for i in range(len(g)):
-            for j in range(i + 1, len(g)):
-                a, c = g.iloc[i], g.iloc[j]
-                if a.model == c.model or a.held == c.held:
-                    ties += 1
-                    continue
-                pairs += 1
-                agree += (a.model < c.model) == (a.held < c.held)
+    rhos, agree, ties, pairs = validity(pd.DataFrame(cand_rows))
     if rhos:
         lo, hi = boot_ci(np.array(rhos), rng)
         w(f"- Within a trip, rank correlation between a candidate's model score and its held-out crashes: mean **{np.mean(rhos):.2f}** "
@@ -300,14 +334,19 @@ def main() -> None:
     OUT.mkdir(exist_ok=True)
     cache = RAW / "trips.json"
     if args.analyze_only:
-        trips = json.loads(cache.read_text())
+        trips = load_cached_trips()
+        if trips is None:
+            raise SystemExit("no cached routes: run once without --analyze-only (needs GraphHopper)")
     else:
         print("fetching routes (GraphHopper + TomTom) ...")
         trips = fetch_trips(args.trips, args.seed, cache)
+        with gzip.open(TRIPS_GZ, "wt") as f:
+            json.dump(trips, f, separators=(",", ":"))
     print(f"{len(trips)} trips; scoring with the grid built from crashes through {TRAIN_UNTIL}")
     held = HeldOut()
     df = evaluate(trips, held)
     df.to_csv(OUT / "results.csv", index=False)
+    (OUT / "metrics.json").write_text(json.dumps(compute_metrics(df, held.n), indent=2))
     text = summarize(df, held.n)
     header = (f"# Router evaluation ({len(trips)} trips x {len(PROFILES)} profiles = {len(df)} cases)\n\n"
               f"Grid built from crashes through {TRAIN_UNTIL}; \"safer\" judged by held-out crashes from "
