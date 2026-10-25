@@ -42,7 +42,7 @@ RATES_PATH = HERE / "segment_rates.json"
 MATCH_M = 15.0
 FIRST_YEAR = 2014
 HALFLIFE = 5.0
-PRIOR_M = 0.005         # smoothing strength (100M vehicle-miles), the optimum found by --validate (0.002 and 0.01 are both worse)
+PRIOR_M = 0.002         # smoothing strength (100M vehicle-miles), chosen on 2022-2023 held out from a 2021 fit, i.e. without looking at 2024-2025 (0.005 was within 0.2% of it)
 M_GRID = (0.0, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 1e9)
 
 

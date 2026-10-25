@@ -1,5 +1,8 @@
 # Data refresh 2026-10-25: **ACCEPTED**
 
+## What changed
+- segment rates
+
 ## Data
 - Crashes through **2026-10-09**: 232,847 geocoded, 9,622 grid squares.
 - New since the last build (crash ids not present in the previous download): **0** crashes.
@@ -11,7 +14,7 @@
   - crash model: exposure; 'safer' = realized crashes per vehicle-mile
   - elderly: reroutes 28% of trips, +0.49 min, per-vehicle risk **-23.4%**
   - sensitive_passenger: reroutes 26% of trips, +0.44 min, per-vehicle risk **-22.7%**
-  - teen: reroutes 22% of trips, +0.33 min, per-vehicle risk **-20.3%**
-- Unit tests: 94 passed, 2 warnings in 3.71s
+  - teen: reroutes 26% of trips, +0.47 min, per-vehicle risk **-23.3%**
+- Unit tests: 94 passed, 2 warnings in 3.97s
 
 _Pass/fail is decided by fixed numeric thresholds in `data/refresh.py`; see its docstring._

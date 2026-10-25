@@ -14,7 +14,7 @@ The backend asks a routing engine (GraphHopper) for several alternative routes, 
 - road characteristics (speed limit, lanes, lighting)
 - for sensitive passengers, ride comfort (rough surface, sharp curves)
 
-Each profile has different weights. The backend returns the fastest route and the safest route that is at most ~25% longer, plus a comparison.
+Each profile has different weights. The backend returns the fastest route and the safest route that is at most ~30% longer, plus a comparison.
 
 Three profiles, exact wire strings: `"teen"`, `"elderly"`, `"sensitive_passenger"`.
 

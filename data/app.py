@@ -85,11 +85,14 @@ def health():
 #               detour must cut risk by more than it adds time (scaled by beta). beta 1 is an even
 #               trade; higher means the profile pays more time for safety.
 ROUTING_RULES = {
-    "teen": {"max_detour": 1.20, "min_gain": 0.05, "beta": 1.0},
+    "teen": {"max_detour": 1.30, "min_gain": 0.05, "beta": 1.5},
     "elderly": {"max_detour": 1.30, "min_gain": 0.03, "beta": 1.5},
-    "sensitive_passenger": {"max_detour": 1.25, "min_gain": 0.03, "beta": 1.5},
+    "sensitive_passenger": {"max_detour": 1.30, "min_gain": 0.03, "beta": 1.5},
 }
-DEFAULT_RULES = {"max_detour": 1.20, "min_gain": 0.05, "beta": 1.0}
+# Chosen on the development era (models built through 2021, judged on 2022-23), where per-vehicle risk reduction is flat
+# at about -20% to -23% for any cap from 1.20 up and extra minutes buy almost nothing beyond ~1.30 / beta 1.5.
+# Teen used a tighter cap (1.20) before, for no data-based reason; 1.30 gains ~2.6 points for ~0.14 min there.
+DEFAULT_RULES = {"max_detour": 1.30, "min_gain": 0.05, "beta": 1.5}
 KM_PER_MILE = 1.609344
 # Event types allowed by the API contract; other hazards (roundabout, u_turn, crossing) still
 # add to risk_score but aren't listed, so the app never sees an unknown type.

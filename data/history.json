@@ -112,5 +112,69 @@
   "similarity": 1.0,
   "status": "accepted",
   "changed": []
+ },
+ {
+  "date": "2026-10-25T12:43:26+00:00",
+  "data_through": "2026-10-09T04:04:00",
+  "crashes": 232847,
+  "cells": 9622,
+  "forward": {
+   "n": 0,
+   "capture": null,
+   "ci": [
+    0,
+    1
+   ],
+   "hits": 0
+  },
+  "new_crashes_note": "crash ids not present in the previous download",
+  "backtest": 0.589,
+  "backtest_detail": {
+   "train_until": 2024,
+   "test_crashes": 20101,
+   "capture10": 0.589
+  },
+  "route": {
+   "model": "exposure",
+   "primary_metric": "pv",
+   "trips": 200,
+   "cases": 600,
+   "held_out_crashes": 32182,
+   "pair_concordance": 0.8209,
+   "pair_concordance_crash_count": 0.3844,
+   "rank_corr": 0.7186,
+   "profiles": {
+    "elderly": {
+     "changed_share": 0.275,
+     "minutes_added": 0.4886,
+     "held_change_pct": -0.459,
+     "pv_change_pct": -23.37,
+     "primary_change_pct": -23.37,
+     "ksi_change_pct": -1.298
+    },
+    "sensitive_passenger": {
+     "changed_share": 0.265,
+     "minutes_added": 0.444,
+     "held_change_pct": 0.4,
+     "pv_change_pct": -22.707,
+     "primary_change_pct": -22.707,
+     "ksi_change_pct": -0.392
+    },
+    "teen": {
+     "changed_share": 0.255,
+     "minutes_added": 0.4705,
+     "held_change_pct": -0.469,
+     "pv_change_pct": -23.315,
+     "primary_change_pct": -23.315,
+     "ksi_change_pct": -1.813
+    }
+   }
+  },
+  "tests": "94 passed, 2 warnings in 3.97s",
+  "similarity": 1.0,
+  "status": "accepted",
+  "changed": [
+   "segment rates"
+  ]
  }
 ]

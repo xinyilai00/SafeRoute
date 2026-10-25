@@ -25,12 +25,12 @@
       "ksi_change_pct": -0.392
     },
     "teen": {
-      "changed_share": 0.22,
-      "minutes_added": 0.3299,
-      "held_change_pct": -0.611,
-      "pv_change_pct": -20.27,
-      "primary_change_pct": -20.27,
-      "ksi_change_pct": -2.122
+      "changed_share": 0.255,
+      "minutes_added": 0.4705,
+      "held_change_pct": -0.469,
+      "pv_change_pct": -23.315,
+      "primary_change_pct": -23.315,
+      "ksi_change_pct": -1.813
     }
   }
 }
