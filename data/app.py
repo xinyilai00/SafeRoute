@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import AliasChoices, BaseModel, Field, field_validator
 
 import live
+import weather
 import routing
 from scoring import hazards_avoided, score_route, to_latlon
 
@@ -188,6 +189,20 @@ def _avoid_note(cands, requested, applied, provider_name):
     return f" (couldn't fully avoid {' or '.join(notes)})" if notes else ""
 
 
+
+def _weather_headers():
+    """Heads-up headers (not part of the contract's body): X-Weather = rain | dry | unknown; while it
+    is raining X-Weather-Crash-Ratio is the measured crashes-per-hour ratio vs a dry hour (about 1.4)."""
+    wx = weather.current()
+    if wx is None:
+        return {"X-Weather": "unknown"}
+    state = "rain" if wx["raining"] else "dry"
+    headers = {"X-Weather": state}
+    if wx["raining"] and (ratio := weather.rain_crash_ratio()):
+        headers["X-Weather-Crash-Ratio"] = f"{ratio:.2f}"
+    return headers
+
+
 @app.post("/route")
 def route(req: RouteRequest):
     for name, p in (("origin", req.origin), ("destination", req.destination)):
@@ -248,4 +263,5 @@ def route(req: RouteRequest):
     return JSONResponse(body, headers={"X-Data-Source": provider.name,
                                        "X-Live-Traffic": "tomtom" if info["live"] else "off",
                                        "X-Closures-Skipped": str(info["dropped"]),
-                                       "X-Avoid-Applied": ",".join(applied) or "none"})
+                                       "X-Avoid-Applied": ",".join(applied) or "none",
+                                       **_weather_headers()})

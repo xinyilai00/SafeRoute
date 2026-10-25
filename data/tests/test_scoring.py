@@ -471,10 +471,11 @@ def test_profiles_differ_only_by_measured_things():
     ratios = json.loads((Path(__file__).parent.parent / "profile_ratios.json").read_text())
     assert P["teen"]["left_crash"] == pytest.approx(P["car"]["left_crash"] * ratios["teen"]["ratios"]["left-turn"])
     assert P["elderly"]["left_crash"] == pytest.approx(P["car"]["left_crash"] * ratios["elderly"]["ratios"]["left-turn"])
-    ignore = {"left_crash", "curve"}
+    ignore = {"left_crash", "curve", "rough"}
     for name in ("teen", "elderly", "sensitive_passenger"):          # everything else is the car baseline
         assert {k: v for k, v in P[name].items() if k not in ignore} == {k: v for k, v in P["car"].items() if k not in ignore}
     assert P["sensitive_passenger"]["curve"] > 0 and P["teen"]["curve"] == P["elderly"]["curve"] == 0
+    assert P["sensitive_passenger"]["rough"] > 0 and P["teen"]["rough"] == P["elderly"]["rough"] == P["car"]["rough"] == 0
 
 
 def test_teen_and_elderly_use_their_own_grid_layers():
@@ -516,3 +517,70 @@ def test_bridge_discount_and_min_rule():
     plain, _ = scoring.score_route(line, "car")
     over, _ = scoring.score_route(line, "car", road_environment=[[0, n - 1, "bridge"]])
     assert over < plain * 0.7
+
+
+# ---------- weather heads-up ----------
+
+def test_weather_classify_and_headers(monkeypatch):
+    import weather
+    assert weather._classify({"precipitation": 0.4, "weather_code": 61, "visibility": 20000, "temperature_2m": 18})["raining"]
+    assert weather._classify({"precipitation": 0, "weather_code": 95})["raining"]            # thunderstorm
+    clear = weather._classify({"precipitation": 0, "rain": 0, "weather_code": 1, "visibility": 25000, "temperature_2m": 20})
+    assert not clear["raining"] and not clear["low_visibility"] and not clear["freezing"]
+    assert weather._classify({"visibility": 1200, "temperature_2m": -3})["low_visibility"]
+    assert weather._classify({"visibility": 1200, "temperature_2m": -3})["freezing"]
+    monkeypatch.setattr(weather, "current", lambda: {"raining": True, "low_visibility": False, "freezing": False, "source": "x"})
+    r = TestClient(app).post("/route", json=ROUTE_REQ)
+    assert r.headers["x-weather"] == "rain" and float(r.headers["x-weather-crash-ratio"]) > 1.2
+    monkeypatch.setattr(weather, "current", lambda: {"raining": False, "low_visibility": False, "freezing": False, "source": "x"})
+    r = TestClient(app).post("/route", json=ROUTE_REQ)
+    assert r.headers["x-weather"] == "dry" and "x-weather-crash-ratio" not in r.headers
+    monkeypatch.setattr(weather, "current", lambda: None)
+    assert TestClient(app).post("/route", json=ROUTE_REQ).headers["x-weather"] == "unknown"
+
+
+def test_weather_current_caches_and_survives_failure(monkeypatch):
+    import httpx, weather
+    monkeypatch.delenv("WEATHER_DISABLED", raising=False)
+    weather._cache.update(expires=0.0, value=None)
+    calls = []
+
+    def fake_get(url, **kw):
+        calls.append(1)
+        req = httpx.Request("GET", url)
+        return httpx.Response(200, request=req, json={"current": {"precipitation": 1.2, "weather_code": 63,
+                                                                  "visibility": 3000, "temperature_2m": 15}})
+    monkeypatch.setattr(httpx, "get", fake_get)
+    first, second = weather.current(), weather.current()
+    assert first == second and first["raining"] and first["low_visibility"] and len(calls) == 1   # cached
+    weather._cache.update(expires=0.0, value=None)
+    monkeypatch.setattr(httpx, "get", lambda url, **kw: (_ for _ in ()).throw(httpx.ConnectError("down")))
+    assert weather.current() is None                                                              # failure -> no heads-up
+    weather._cache.update(expires=0.0, value=None)
+
+
+# ---------- pavement (ride comfort) ----------
+
+def _graded_segment(grade):
+    data = json.loads((Path(__file__).parent.parent / "street_condition.json").read_text())
+    return max((d for d in data if d[0] == grade), key=lambda d: len(d[2]))[2]
+
+
+def test_rough_pavement_only_penalised_for_sensitive_passenger():
+    rough, smooth = _graded_segment("F"), _graded_segment("A")
+    sp, hz = scoring.score_route(rough, "sensitive_passenger")
+    car, hz_car = scoring.score_route(rough, "car")
+    assert any(h["type"] == "rough_road" for h in hz) and not any(h["type"] == "rough_road" for h in hz_car)
+    assert sp > car
+    assert not any(h["type"] == "rough_road" for h in scoring.score_route(smooth, "sensitive_passenger")[1])
+    assert not any(h["type"] == "rough_road" for h in scoring.score_route(rough, "teen")[1])
+
+
+def test_rough_km_uses_city_grades_and_ignores_far_routes():
+    f = _graded_segment("F")
+    xy, cum = scoring._project(f)
+    km, where = scoring._rough_km(xy, cum)
+    assert km > 0 and where is not None and abs(km - cum[-1] / 1000) < 0.2 * cum[-1] / 1000 + 0.02  # grade F counts fully
+    far = [[-98.05, 30.70], [-98.05, 30.71]]                     # empty land: no graded streets
+    xy2, cum2 = scoring._project(far)
+    assert scoring._rough_km(xy2, cum2)[0] == 0.0

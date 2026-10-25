@@ -28,6 +28,7 @@ from pyproj import Transformer
 RISK_PATH = Path(__file__).parent / "risk.geojson"
 RATIOS_PATH = Path(__file__).parent / "profile_ratios.json"
 SIGNALS_PATH = Path(__file__).parent / "signals.json"
+PAVEMENT_PATH = Path(__file__).parent / "street_condition.json"
 STEP_M = 20.0  # sampling distance along the route
 
 # Per-profile weights. Accepts GraphHopper profile names too (car/bike/foot, etc.).
@@ -37,6 +38,7 @@ PROFILES = {
         left=1.5, sharp_left=2.5, slight_left=0.0,
         left_major=2.5,     # extra for a left at a fast-road cell (unprotected-left proxy)
         curve=0.0,          # points per degree of smooth curving (ride comfort)
+        rough=0.0,          # points per km of rough pavement (city grade D/F); ride comfort
         left_crash=4.0,     # x left_risk (0..1): left-turn crash history at the turn's cell
         merge=1.5, roundabout=0.5, u_turn=2.0,
         quick_after_exit=2.5,
@@ -45,14 +47,14 @@ PROFILES = {
         crash=14.0,
         left=2.5, sharp_left=3.5, slight_left=0.5,
         left_major=4.0,
-        left_crash=5.0, curve=0.0,
+        left_crash=5.0, curve=0.0, rough=0.0,
         merge=3.0, roundabout=3.0, u_turn=2.0,
         quick_after_exit=3.0,
     ),
     "foot": dict(
         crash=12.0,
         left=0.0, sharp_left=0.0, slight_left=0.0,
-        left_major=0.0, left_crash=0.0, curve=0.0,
+        left_major=0.0, left_crash=0.0, curve=0.0, rough=0.0,
                             # for walkers a "turn" is a crossing; see crossing below
         merge=0.0, roundabout=1.5, u_turn=0.0,
         quick_after_exit=0.0,
@@ -73,12 +75,13 @@ def _measured_ratio(profile, ctype):
 #    from each group's measured collision-type mix;
 #  - left_crash is scaled by the group's measured left-turn ratio.
 # sensitive_passenger has no crash data behind it; its only difference is the ride-comfort curvature
-# penalty, which is an assumption, not a measurement. Other maneuver weights stay at the car baseline.
+# and rough-pavement penalties. WHERE the pavement is rough comes from the city's own grades (real data);
+# how much to penalise curves and rough streets is an assumption. Other maneuver weights stay at the car baseline.
 PROFILES["teen"] = {**PROFILES["car"],
                     "left_crash": PROFILES["car"]["left_crash"] * _measured_ratio("teen", "left-turn")}
 PROFILES["elderly"] = {**PROFILES["car"],
                        "left_crash": PROFILES["car"]["left_crash"] * _measured_ratio("elderly", "left-turn")}
-PROFILES["sensitive_passenger"] = {**PROFILES["car"], "curve": 0.03}
+PROFILES["sensitive_passenger"] = {**PROFILES["car"], "curve": 0.03, "rough": 6.0}
 # index into the grid cell tuple (risk, speed, left_risk, risk_teen, risk_elderly)
 PROFILE_LAYER = {"teen": 3, "elderly": 4}
 ALIASES = {"driving": "car", "auto": "car", "cycling": "bike", "bicycle": "bike",
@@ -191,6 +194,44 @@ def _signals():
     return np.column_stack([xs, ys])
 
 
+@lru_cache(maxsize=1)
+def _pavement():
+    """(STRtree of graded street segments in UTM metres, per-segment roughness factor) or None if missing."""
+    try:
+        from shapely import STRtree
+        from shapely.geometry import LineString
+        data = json.loads(PAVEMENT_PATH.read_text())
+    except Exception:
+        return None
+    to_utm = _to_utm()
+    lines, factors = [], []
+    for grade, _iri, coords in data:
+        xs, ys = to_utm.transform([c[0] for c in coords], [c[1] for c in coords])
+        lines.append(LineString(list(zip(xs, ys))))
+        factors.append(ROUGH_GRADES.get(grade, 0.0))
+    return STRtree(lines), np.array(factors)
+
+
+def _rough_km(xy, cum):
+    """(effective km of rough pavement along the route, (x, y) of the first rough sample or None)."""
+    pav = _pavement()
+    if pav is None:
+        return 0.0, None
+    from shapely.geometry import Point
+    tree, factors = pav
+    total = cum[-1]
+    n = max(int(np.ceil(total / STEP_M)), 1)
+    step = total / n
+    ds = (np.arange(n) + 0.5) * step
+    pts = [Point(np.interp(d, cum, xy[:, 0]), np.interp(d, cum, xy[:, 1])) for d in ds]
+    q_idx, t_idx = tree.query_nearest(pts, max_distance=PAVEMENT_MATCH_M, all_matches=False)
+    rough = np.zeros(n)
+    rough[q_idx] = factors[t_idx]
+    first = np.flatnonzero(rough > 0)
+    where = (pts[first[0]].x, pts[first[0]].y) if len(first) else None
+    return float(rough.sum() * step / 1000.0), where
+
+
 def _signalized(x, y):
     sig = _signals()
     return bool(len(sig) and np.min(np.hypot(sig[:, 0] - x, sig[:, 1] - y)) <= SIGNAL_RADIUS_M)
@@ -238,6 +279,10 @@ HIGHWAY_CRASH_FACTOR = 0.6
 BRIDGE_CLASSES = {"bridge", "tunnel"}
 BRIDGE_CRASH_FACTOR = 0.5
 SIGNAL_RADIUS_M = 35.0      # a left turn this close to a traffic signal counts as signalized
+
+# City of Austin street condition: the city's own letter grades. Share of a stretch counted as "rough".
+ROUGH_GRADES = {"F": 1.0, "D": 0.5}
+PAVEMENT_MATCH_M = 15.0     # a route sample this close to a graded street segment takes that segment's grade
 
 CURVE_STEP_M = 25.0         # resampling distance for curvature
 CURVE_MAX_STEP_DEG = 25.0   # a bigger heading change within one step is a corner, scored as a turn instead
@@ -293,6 +338,16 @@ def score_route(polyline, profile="car", instructions=None, precision=5, road_cl
                             points=round(curve_pts, 2), description="Winding road with sharp curves"))
 
     # ---- 2. turn-instruction penalties ----
+    # ---- ride comfort: rough pavement (city grades D/F), for profiles that care ----
+    if w["rough"] > 0:
+        rough_km, where = _rough_km(xy, cum)
+        rough_pts = w["rough"] * rough_km
+        if rough_pts >= 1.0 and where:
+            score += rough_pts
+            lon0, lat0 = _to_utm().transform(*where, direction="INVERSE")
+            hazards.append(dict(type="rough_road", lat=lat0, lon=lon0, distance_m=0, points=round(rough_pts, 2),
+                                description=f"{rough_km:.1f} km of rough pavement (city grade D/F)"))
+
     prev_exit = None
     for idx, ins in enumerate(instructions or []):
         sign = ins.get("sign", 0)
@@ -379,6 +434,7 @@ _AVOID_LABELS = {
     "u_turn": ("U-turn", "U-turns"),
     "high_crash_zone": ("high-crash zone", "high-crash zones"),
     "winding_road": ("winding road", "winding roads"),
+    "rough_road": ("rough-pavement stretch", "rough-pavement stretches"),
     "crossing": ("crossing of a fast road", "crossings of fast roads"),
 }
 

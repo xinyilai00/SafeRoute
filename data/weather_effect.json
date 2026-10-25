@@ -1,0 +1,294 @@
+{
+  "station": "USW00013904 (Austin-Bergstrom)",
+  "years": [
+    2014,
+    2025
+  ],
+  "shrink_k": 20.0,
+  "note": "crashes per hour vs dry hours at the same local hour-of-day and weekday/weekend; not per vehicle-mile",
+  "shares_of_hours": {
+    "wet": 0.0671,
+    "lowvis": 0.0255,
+    "freezing": 0.0192
+  },
+  "all": {
+    "wet": {
+      "hours": 7059,
+      "observed": 15760,
+      "expected": 11019.7,
+      "ratio": 1.43,
+      "ci95": [
+        1.408,
+        1.453
+      ],
+      "shrunk": 1.429
+    },
+    "lowvis": {
+      "hours": 2678,
+      "observed": 5105,
+      "expected": 3849.5,
+      "ratio": 1.326,
+      "ci95": [
+        1.29,
+        1.363
+      ],
+      "shrunk": 1.324
+    },
+    "freezing": {
+      "hours": 2021,
+      "observed": 2166,
+      "expected": 2443.1,
+      "ratio": 0.887,
+      "ci95": [
+        0.85,
+        0.925
+      ],
+      "shrunk": 0.887
+    }
+  },
+  "ksi": {
+    "wet": {
+      "hours": 7059,
+      "observed": 396,
+      "expected": 397.6,
+      "ratio": 0.996,
+      "ci95": [
+        0.902,
+        1.099
+      ],
+      "shrunk": 0.996
+    },
+    "lowvis": {
+      "hours": 2678,
+      "observed": 157,
+      "expected": 135.3,
+      "ratio": 1.161,
+      "ci95": [
+        0.992,
+        1.357
+      ],
+      "shrunk": 1.14
+    },
+    "freezing": {
+      "hours": 2021,
+      "observed": 67,
+      "expected": 102.2,
+      "ratio": 0.656,
+      "ci95": [
+        0.516,
+        0.833
+      ],
+      "shrunk": 0.712
+    }
+  },
+  "left-turn": {
+    "wet": {
+      "hours": 7059,
+      "observed": 2572,
+      "expected": 2121.2,
+      "ratio": 1.213,
+      "ci95": [
+        1.167,
+        1.26
+      ],
+      "shrunk": 1.211
+    },
+    "lowvis": {
+      "hours": 2678,
+      "observed": 827,
+      "expected": 703.9,
+      "ratio": 1.175,
+      "ci95": [
+        1.097,
+        1.258
+      ],
+      "shrunk": 1.17
+    },
+    "freezing": {
+      "hours": 2021,
+      "observed": 249,
+      "expected": 411.2,
+      "ratio": 0.606,
+      "ci95": [
+        0.535,
+        0.686
+      ],
+      "shrunk": 0.624
+    }
+  },
+  "single-vehicle": {
+    "wet": {
+      "hours": 7059,
+      "observed": 5370,
+      "expected": 2477.3,
+      "ratio": 2.168,
+      "ci95": [
+        2.11,
+        2.226
+      ],
+      "shrunk": 2.158
+    },
+    "lowvis": {
+      "hours": 2678,
+      "observed": 1668,
+      "expected": 902.5,
+      "ratio": 1.848,
+      "ci95": [
+        1.762,
+        1.939
+      ],
+      "shrunk": 1.83
+    },
+    "freezing": {
+      "hours": 2021,
+      "observed": 968,
+      "expected": 743.9,
+      "ratio": 1.301,
+      "ci95": [
+        1.222,
+        1.386
+      ],
+      "shrunk": 1.293
+    }
+  },
+  "rear-end/stopped": {
+    "wet": {
+      "hours": 7059,
+      "observed": 2037,
+      "expected": 1686.8,
+      "ratio": 1.208,
+      "ci95": [
+        1.156,
+        1.261
+      ],
+      "shrunk": 1.205
+    },
+    "lowvis": {
+      "hours": 2678,
+      "observed": 731,
+      "expected": 595.3,
+      "ratio": 1.228,
+      "ci95": [
+        1.142,
+        1.32
+      ],
+      "shrunk": 1.221
+    },
+    "freezing": {
+      "hours": 2021,
+      "observed": 225,
+      "expected": 333.4,
+      "ratio": 0.675,
+      "ci95": [
+        0.592,
+        0.769
+      ],
+      "shrunk": 0.693
+    }
+  },
+  "angle": {
+    "wet": {
+      "hours": 7059,
+      "observed": 2126,
+      "expected": 1798.4,
+      "ratio": 1.182,
+      "ci95": [
+        1.133,
+        1.234
+      ],
+      "shrunk": 1.18
+    },
+    "lowvis": {
+      "hours": 2678,
+      "observed": 694,
+      "expected": 621.0,
+      "ratio": 1.118,
+      "ci95": [
+        1.038,
+        1.204
+      ],
+      "shrunk": 1.114
+    },
+    "freezing": {
+      "hours": 2021,
+      "observed": 269,
+      "expected": 348.2,
+      "ratio": 0.773,
+      "ci95": [
+        0.686,
+        0.871
+      ],
+      "shrunk": 0.785
+    }
+  },
+  "opposite-direction": {
+    "wet": {
+      "hours": 7059,
+      "observed": 376,
+      "expected": 158.9,
+      "ratio": 2.366,
+      "ci95": [
+        2.139,
+        2.618
+      ],
+      "shrunk": 2.214
+    },
+    "lowvis": {
+      "hours": 2678,
+      "observed": 124,
+      "expected": 54.7,
+      "ratio": 2.267,
+      "ci95": [
+        1.901,
+        2.703
+      ],
+      "shrunk": 1.928
+    },
+    "freezing": {
+      "hours": 2021,
+      "observed": 41,
+      "expected": 38.6,
+      "ratio": 1.063,
+      "ci95": [
+        0.783,
+        1.443
+      ],
+      "shrunk": 1.041
+    }
+  },
+  "other": {
+    "wet": {
+      "hours": 7059,
+      "observed": 3279,
+      "expected": 2777.2,
+      "ratio": 1.181,
+      "ci95": [
+        1.141,
+        1.222
+      ],
+      "shrunk": 1.179
+    },
+    "lowvis": {
+      "hours": 2678,
+      "observed": 1061,
+      "expected": 972.2,
+      "ratio": 1.091,
+      "ci95": [
+        1.028,
+        1.159
+      ],
+      "shrunk": 1.09
+    },
+    "freezing": {
+      "hours": 2021,
+      "observed": 414,
+      "expected": 567.9,
+      "ratio": 0.729,
+      "ci95": [
+        0.662,
+        0.803
+      ],
+      "shrunk": 0.738
+    }
+  }
+}
