@@ -6,8 +6,10 @@
 import SwiftUI
 
 /// Circular glass button showing the current profile's symbol; opens a menu of the three profiles.
+/// A one-second hold calls `onLongPress` (the demo hook that shows onboarding again).
 struct ProfilePicker: View {
     @Binding var selection: Profile
+    var onLongPress: (() -> Void)?
 
     var body: some View {
         Menu {
@@ -29,10 +31,18 @@ struct ProfilePicker: View {
                 .frame(width: 44, height: 44)
                 .contentTransition(.symbolEffect(.replace))
                 .glassEffect(.regular.interactive(), in: .circle)
+                .brandGlow(in: .circle)
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
+        // Runs alongside the menu's own touch handling so the hold is recognized even though the menu opens.
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 1.0).onEnded { _ in
+                onLongPress?()
+            }
+        )
         .accessibilityLabel("Profile: \(selection.displayName)")
+        .accessibilityHint(onLongPress == nil ? "" : "Hold to show the welcome screens again.")
     }
 }
 

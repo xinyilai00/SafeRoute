@@ -8,7 +8,7 @@ import Foundation
 /// Fetches the crash-risk grid (GET /risk) and prepares it for drawing.
 /// No mock: if this fails the heatmap toggle is hidden.
 nonisolated struct RiskService {
-    /// Runs off the main actor: the payload is around 1 MB and the banding/merging pass is CPU work.
+    /// Runs off the main actor: the payload is around 1 MB and tracing and smoothing the zones is CPU work.
     @concurrent
     func fetchHeatmap(minRisk: Double = Config.riskMinimum) async throws -> [HeatBand] {
         guard Config.isBackendConfigured,
@@ -28,6 +28,10 @@ nonisolated struct RiskService {
             throw BackendError.badStatus(http.statusCode)
         }
         let cells = try JSONDecoder().decode(RiskFeatureCollection.self, from: data).cells
-        return RiskHeatmap.bands(from: cells, minimum: minRisk)
+        let bands = RiskHeatmap.bands(from: cells, minimum: minRisk)
+        let zones = bands.reduce(0) { $0 + $1.zones.count }
+        let points = bands.reduce(0) { $0 + $1.pointCount }
+        print("RiskService: \(cells.count) cells -> \(zones) heat zones in \(bands.count) bands, \(points) points")
+        return bands
     }
 }

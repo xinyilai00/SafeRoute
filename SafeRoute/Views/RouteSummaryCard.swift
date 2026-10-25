@@ -33,8 +33,18 @@ struct RouteSummaryCard: View {
     /// A flick: where the drag would have ended on its own.
     private static let dismissFlickDistance: CGFloat = 180
 
-    /// A little darker than the system green so white and green text read well, which matters for elderly drivers.
-    private static let deepGreen = Color(red: 0.12, green: 0.60, blue: 0.32)
+    /// Fill for the pill and the Start button: vivid, but still dark enough for bold white text on it.
+    private static let deepGreen = Color(red: 0.11, green: 0.69, blue: 0.35)
+    /// The arrival line and the closure note: a touch brighter than the fill so it does not read as dull through the glass.
+    private static let textGreen = Color(red: 0.07, green: 0.71, blue: 0.33)
+    /// The ETA, top of the card's hierarchy: a light-to-deep green gradient gives the digits some life.
+    private static let etaGradient = LinearGradient(
+        colors: [Color(red: 0.18, green: 0.82, blue: 0.42), Color(red: 0.04, green: 0.62, blue: 0.30)],
+        startPoint: .top,
+        endPoint: .bottom
+    )
+    /// Set shortly after the card appears so the ETA can spring in rather than just be there.
+    @State private var etaAppeared = false
 
     private var response: RouteResponse { result.response }
     private var safest: Route { response.safest }
@@ -107,11 +117,7 @@ struct RouteSummaryCard: View {
     private var heroRow: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .center, spacing: 12) {
-                Text("\(displayedMinutes(safest)) min")
-                    .font(.system(size: 44, weight: .bold))
-                    .monospacedDigit()
-                    .foregroundStyle(Self.deepGreen)
-                    .fixedSize()
+                etaText
                 Spacer(minLength: 8)
                 Text(response.routesAreIdentical ? "Safest and fastest" : "\(riskPercent)% safer")
                     .font(.subheadline.weight(.bold))
@@ -126,7 +132,7 @@ struct RouteSummaryCard: View {
                 TimelineView(.everyMinute) { context in
                     Text("Arrive \(context.date.addingTimeInterval(safest.etaMinutes * 60).formatted(date: .omitted, time: .shortened))")
                         .font(.title3.weight(.semibold))
-                        .foregroundStyle(Self.deepGreen)
+                        .foregroundStyle(Self.textGreen)
                         .fixedSize()
                 }
                 Spacer(minLength: 8)
@@ -141,6 +147,29 @@ struct RouteSummaryCard: View {
 
     private var riskPercent: Int {
         max(0, Int(response.comparison.riskReductionPct.rounded()))
+    }
+
+    /// The safe ETA. Digits roll when the number changes (profile switch, reroute), the whole figure
+    /// springs in on appearance, and a soft green glow lifts it off the glass.
+    private var etaText: some View {
+        let minutes = displayedMinutes(safest)
+        return Text("\(minutes) min")
+            .font(.system(size: 44, weight: .bold))
+            .monospacedDigit()
+            .foregroundStyle(Self.etaGradient)
+            .shadow(color: Self.textGreen.opacity(0.35), radius: 10, y: 2)
+            .fixedSize()
+            .contentTransition(.numericText(value: Double(minutes)))
+            .animation(.spring(duration: 0.6, bounce: 0.2), value: minutes)
+            .scaleEffect(etaAppeared ? 1 : 0.85, anchor: .leading)
+            .opacity(etaAppeared ? 1 : 0)
+            .task {
+                // One frame later than appearance, so the spring has a starting state to animate from.
+                try? await Task.sleep(for: .milliseconds(40))
+                withAnimation(.spring(duration: 0.7, bounce: 0.35)) {
+                    etaAppeared = true
+                }
+            }
     }
 
     // MARK: - Quicker route and hazards

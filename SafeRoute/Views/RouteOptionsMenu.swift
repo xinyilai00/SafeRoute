@@ -23,6 +23,7 @@ struct RouteOptionsMenu: View {
                 .font(.title3.weight(.semibold))
                 .frame(width: 44, height: 44)
                 .glassEffect(.regular.interactive(), in: .circle)
+                .brandGlow(in: .circle)
                 .overlay(alignment: .topTrailing) {
                     if isActive {
                         Circle()

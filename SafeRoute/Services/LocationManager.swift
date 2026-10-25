@@ -23,23 +23,43 @@ final class LocationManager: NSObject, CLLocationManagerDelegate {
         authorizationStatus == .authorizedWhenInUse || authorizationStatus == .authorizedAlways
     }
 
-    /// Prompts for permission if needed, then starts location updates. Safe to call repeatedly.
-    func start() {
-        if !isConfigured {
-            isConfigured = true
-            manager.delegate = self
-            manager.desiredAccuracy = kCLLocationAccuracyBest
-            manager.distanceFilter = 10
+    /// True once the user has answered the system permission prompt, either way.
+    var hasDecidedPermission: Bool { authorizationStatus != .notDetermined }
+
+    /// Shows the system permission prompt if the user was never asked (onboarding's "Allow location").
+    /// Updates start from the authorization callback once permission is granted.
+    func requestPermission() {
+        configureIfNeeded()
+        authorizationStatus = manager.authorizationStatus
+        if authorizationStatus == .notDetermined {
+            manager.requestWhenInUseAuthorization()
         }
+    }
+
+    /// Starts location updates when authorized. With `requestingPermission` (the default) a user who was
+    /// never asked gets the system prompt first; the map passes false right after onboarding's "Not now"
+    /// so the prompt is not repeated until the next launch. Safe to call repeatedly.
+    func start(requestingPermission: Bool = true) {
+        configureIfNeeded()
         authorizationStatus = manager.authorizationStatus
         switch authorizationStatus {
         case .notDetermined:
-            manager.requestWhenInUseAuthorization()
+            if requestingPermission {
+                manager.requestWhenInUseAuthorization()
+            }
         case .authorizedWhenInUse, .authorizedAlways:
             manager.startUpdatingLocation()
         default:
             break
         }
+    }
+
+    private func configureIfNeeded() {
+        guard !isConfigured else { return }
+        isConfigured = true
+        manager.delegate = self
+        manager.desiredAccuracy = kCLLocationAccuracyBest
+        manager.distanceFilter = 10
     }
 
     /// Drive mode: best-for-navigation accuracy, automotive activity, every fix delivered.

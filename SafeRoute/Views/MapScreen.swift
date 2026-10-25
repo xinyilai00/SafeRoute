@@ -9,8 +9,13 @@ import UIKit
 
 /// Full-screen map: user location, destination search, fastest/safest routes, and the summary card.
 struct MapScreen: View {
-    @State private var locationManager = LocationManager()
-    @State private var model = MapScreenModel()
+    /// Created by `ContentView` and shared with onboarding, which asks for location permission.
+    let locationManager: LocationManager
+    @Bindable var model: MapScreenModel
+    /// False right after onboarding's "Not now", so the system prompt is not shown again until the next launch.
+    var promptsForLocationOnAppear = true
+    /// Demo hook: holding the profile button shows onboarding again.
+    var onResetOnboarding: () -> Void = {}
     @State private var cameraPosition: MapCameraPosition = .userLocation(fallback: .region(Config.austinRegion))
     @FocusState private var isSearchFocused: Bool
     /// Hazard markers in the route overview; recomputed when the result changes.
@@ -34,6 +39,11 @@ struct MapScreen: View {
     @State private var cameraHeading: Double = 0
 
     private var isDriving: Bool { drive != nil }
+
+    /// True while the bottom panel shows a card (route, loading or coverage); the bottom glow follows it.
+    private var showsRouteCard: Bool {
+        !isDriving && model.destination != nil && (model.result != nil || model.isOutsideCoverage || model.isLoading)
+    }
 
     /// Height reserved at the top so camera fitting keeps routes out from under the search field,
     /// which grows into the two-line From / To panel once a destination is chosen.
@@ -129,6 +139,29 @@ struct MapScreen: View {
             }
             // Runs alongside MapKit's own gestures: a tap anywhere on the map puts the keyboard away.
             .simultaneousGesture(TapGesture().onEnded { isSearchFocused = false })
+            // Atmosphere, added before the insets so the card and the drive banner draw above it. `ScreenEdges`
+            // stretches each layer to the physical top and bottom of the screen; an overlay on the Map otherwise
+            // stops at the device's own safe-area insets.
+            .overlay {
+                ScreenEdges {
+                    VStack(spacing: 0) {
+                        TopEdgeBlur()
+                        Spacer(minLength: 0)
+                    }
+                }
+            }
+            .overlay {
+                ScreenEdges {
+                    VStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                        if showsRouteCard {
+                            BottomGlow()
+                                .transition(.opacity)
+                        }
+                    }
+                    .animation(.easeInOut(duration: 0.5), value: showsRouteCard)
+                }
+            }
             .safeAreaInset(edge: .top, spacing: 0) {
                 if let drive {
                     DriveBanner(banner: drive.banner, isMuted: drive.isMuted, onToggleMute: drive.toggleMute)
@@ -158,7 +191,7 @@ struct MapScreen: View {
         .ignoresSafeArea(.keyboard)
         .onAppear {
             model.profile = storedProfile
-            locationManager.start()
+            locationManager.start(requestingPermission: promptsForLocationOnAppear)
             model.loadRiskGridIfNeeded()
         }
         .onChange(of: model.profile) { _, profile in
@@ -211,7 +244,7 @@ struct MapScreen: View {
         // Top-right cluster under the search field; drawn before SearchBar so its dropdown covers it.
         GlassEffectContainer(spacing: 12) {
             VStack(spacing: 12) {
-                ProfilePicker(selection: $model.profile)
+                ProfilePicker(selection: $model.profile, onLongPress: onResetOnboarding)
                 MapStyleMenu(selection: $mapStyleChoice)
                 RouteOptionsMenu(avoidTolls: $avoidTolls, avoidHighways: $avoidHighways)
                 // Shows itself only while the map is not facing north, like the system compass.
@@ -265,7 +298,7 @@ struct MapScreen: View {
     /// the card as an overlay, outside the inset; without a route they are the inset themselves.
     @ViewBuilder
     private var bottomPanel: some View {
-        if model.destination != nil, model.result != nil || model.isOutsideCoverage || model.isLoading {
+        if showsRouteCard {
             routeCard
                 .overlay(alignment: .topTrailing) {
                     controlsRow
@@ -319,6 +352,7 @@ struct MapScreen: View {
                 .font(.title3.weight(.semibold))
                 .frame(width: 44, height: 44)
                 .glassEffect(.regular.interactive(), in: .circle)
+                .brandGlow(in: .circle)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Recenter on my location")
@@ -374,6 +408,7 @@ struct MapScreen: View {
             .padding(.horizontal, 16)
             .frame(height: 44)
             .glassEffect(.regular.interactive(), in: .capsule)
+            .brandGlow(in: .capsule)
         }
         .buttonStyle(.plain)
         .disabled(model.riskBands == nil)
@@ -390,9 +425,14 @@ struct MapScreen: View {
     }
 
     /// Back to the neutral state: the search field's x and pulling the card down both land here.
+    /// The card and the From / To panel leave first, which changes the map's insets; a camera change in
+    /// that same update is applied by MapKit without animation, so the glide starts a moment later.
     private func clearRoute() {
         model.clearDestination()
-        recenterOnUser()
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(80))
+            recenterOnUser()
+        }
     }
 
     /// Re-requests with the current profile and options if a route is showing or being fetched.
@@ -457,7 +497,7 @@ struct MapScreen: View {
     /// Animates back to the user. `.userLocation` only moves on a new fix, so a stationary phone
     /// would not budge; centering on the last known coordinate always animates.
     private func recenterOnUser() {
-        withAnimation(.easeInOut(duration: 0.6)) {
+        withAnimation(.easeInOut(duration: 0.9)) {
             if let user = locationManager.coordinate {
                 cameraPosition = .region(MKCoordinateRegion(center: user, latitudinalMeters: 1_500, longitudinalMeters: 1_500))
             } else {
@@ -500,5 +540,5 @@ struct MapScreen: View {
 }
 
 #Preview {
-    MapScreen()
+    MapScreen(locationManager: LocationManager(), model: MapScreenModel())
 }

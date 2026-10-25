@@ -39,6 +39,24 @@ nonisolated enum Profile: String, CaseIterable, Identifiable, Codable {
         }
     }
 
+    /// Card title on the onboarding screen.
+    var onboardingTitle: String {
+        switch self {
+        case .teen: "Teen driver"
+        case .elderly: "Elderly driver"
+        case .sensitivePassenger: "Sensitive passenger"
+        }
+    }
+
+    /// One line on the onboarding card: what SafeRoute watches out for with this profile.
+    var onboardingLine: String {
+        switch self {
+        case .teen: "Watches for highway merges and fast left turns."
+        case .elderly: "Watches for left turns across traffic and busy junctions."
+        case .sensitivePassenger: "Watches for sharp curves and rough roads."
+        }
+    }
+
     /// SF Symbol shown next to the profile.
     var symbolName: String {
         switch self {

@@ -63,6 +63,7 @@ struct MapStyleMenu: View {
                 .frame(width: 44, height: 44)
                 .contentTransition(.symbolEffect(.replace))
                 .glassEffect(.regular.interactive(), in: .circle)
+                .brandGlow(in: .circle)
         }
         .menuStyle(.button)
         .buttonStyle(.plain)

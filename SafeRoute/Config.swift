@@ -16,8 +16,9 @@ nonisolated enum Config {
     static var isBackendConfigured: Bool { !baseURL.contains("REPLACE-ME") }
 
     /// `min_risk` for GET /risk: cells below this are not fetched or drawn. Raise it if the heatmap is laggy.
-    /// Measured against the server, cells -> MapPolygons after banding into 5 colors and merging neighbours:
-    /// 0.3 -> 3266 cells / 2504 polygons (1.3 MB), 0.4 -> 2310 / 1836, 0.5 -> 1472 / 1215, 0.6 -> 761 / 665.
+    /// Measured against the server at 0.5: 1472 cells (0.67 MB) -> 836 smooth heat zones over 5 nested bands
+    /// (48k points, 13 ms), where the old square heatmap drew 1215 merged rectangles. 10 bands (1516 zones) lagged. Lower thresholds fetch more:
+    /// 0.3 -> 3266 cells (1.3 MB), 0.4 -> 2310, 0.6 -> 761.
     static let riskMinimum = 0.5
 
     /// UserDefaults key (via @AppStorage) for the remembered profile.
@@ -25,6 +26,9 @@ nonisolated enum Config {
 
     /// UserDefaults key (via @AppStorage) for the remembered map style.
     static let mapStyleStorageKey = "mapStyle"
+
+    /// UserDefaults key (via @AppStorage): true once the first-launch onboarding was completed.
+    static let onboardingStorageKey = "hasCompletedOnboarding"
 
     /// UserDefaults keys (via @AppStorage) for the route options sent as `avoid`.
     static let avoidTollsStorageKey = "avoidTolls"
