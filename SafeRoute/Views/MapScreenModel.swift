@@ -62,6 +62,14 @@ final class MapScreenModel {
         isLoading = false
     }
 
+    /// Back to the neutral state: no destination, routes, markers or card.
+    func clearDestination() {
+        routeTask?.cancel()
+        destination = nil
+        result = nil
+        isLoading = false
+    }
+
     /// Requests fastest + safest routes for the current destination and profile.
     /// `origin` is the user's location; when unavailable the UT Austin fallback keeps the demo working.
     func findRoute(from origin: CLLocationCoordinate2D?) {

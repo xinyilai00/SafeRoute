@@ -33,6 +33,9 @@ nonisolated struct Route: Decodable, Equatable {
 
     /// The app displays miles; the backend sends kilometers.
     var distanceMiles: Double { distanceKm * 0.621371 }
+
+    /// Events worth a marker: turns, merges and exits. High-crash zones are left to the heatmap.
+    var maneuverEvents: [RiskEvent] { riskEvents.filter { $0.kind != .highCrashZone } }
 }
 
 /// A hazard along a route.
@@ -75,6 +78,19 @@ nonisolated enum RiskEventType: String, CaseIterable {
         case .highwayMerge: "arrow.triangle.merge"
         case .highCrashZone: "exclamationmark.triangle.fill"
         case .unknown: "exclamationmark.circle.fill"
+        }
+    }
+
+    /// Plain-language name for a count, e.g. "2 busy left turns".
+    func friendlyName(count: Int) -> String {
+        let plural = count != 1
+        switch self {
+        case .leftTurnMajor: return plural ? "busy left turns" : "busy left turn"
+        case .leftTurn: return plural ? "left turns" : "left turn"
+        case .highwayMerge: return plural ? "highway merges" : "highway merge"
+        case .quickExitTurn: return plural ? "quick turns after exits" : "quick turn after an exit"
+        case .highCrashZone: return plural ? "crash hotspots" : "crash hotspot"
+        case .unknown: return plural ? "hazards" : "hazard"
         }
     }
 }

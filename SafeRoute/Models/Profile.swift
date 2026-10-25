@@ -21,7 +21,16 @@ nonisolated enum Profile: String, CaseIterable, Identifiable, Codable {
         }
     }
 
-    /// Short label for the segmented control.
+    /// One line shown under the name in the profile menu.
+    var summary: String {
+        switch self {
+        case .teen: "New driver. Avoids merges and fast left turns."
+        case .elderly: "Fewer left turns and complex junctions."
+        case .sensitivePassenger: "Smooth ride. Avoids sharp turns and rough roads."
+        }
+    }
+
+    /// Short label (kept for compact layouts).
     var shortName: String {
         switch self {
         case .teen: "Teen"

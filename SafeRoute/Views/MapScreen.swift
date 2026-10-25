@@ -11,14 +11,21 @@ struct MapScreen: View {
     @State private var locationManager = LocationManager()
     @State private var model = MapScreenModel()
     @State private var cameraPosition: MapCameraPosition = .userLocation(fallback: .region(Config.austinRegion))
-    @Namespace private var mapScope
+    @FocusState private var isSearchFocused: Bool
+    /// Marker whose description bubble is open: "fastest-<event id>" or "safest-<event id>".
+    @State private var selectedEventKey: String?
+    /// Where the "Safe · 24 min" / "Fastest · 23 min" capsules sit; recomputed when the result changes.
+    @State private var labelAnchors: RouteLabelAnchors?
+    /// Remembered between launches; mirrored into `model.profile`.
+    @AppStorage(Config.profileStorageKey) private var storedProfile: Profile = .teen
+    @AppStorage(Config.mapStyleStorageKey) private var mapStyleChoice: MapStyleChoice = .standard
 
     /// Height reserved at the top so camera fitting keeps routes out from under the search field.
     private let searchBarReserve: CGFloat = 64
 
     var body: some View {
         ZStack(alignment: .top) {
-            Map(position: $cameraPosition, scope: mapScope) {
+            Map(position: $cameraPosition) {
                 UserAnnotation()
 
                 if model.showsRiskHeatmap, let bands = model.riskBands {
@@ -26,15 +33,61 @@ struct MapScreen: View {
                 }
 
                 if let result = model.result {
-                    MapPolyline(coordinates: result.response.fastest.coordinates)
-                        .stroke(.gray, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
+                    // The gray route and its markers are what the safe route avoids; nothing to show when identical.
+                    // White casings keep both lines legible on satellite and hybrid imagery.
+                    if !result.response.routesAreIdentical {
+                        MapPolyline(coordinates: result.response.fastest.coordinates)
+                            .stroke(.white.opacity(0.85), style: StrokeStyle(lineWidth: 8, lineCap: .round, lineJoin: .round))
+                        MapPolyline(coordinates: result.response.fastest.coordinates)
+                            .stroke(.gray, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
+                    }
+                    MapPolyline(coordinates: result.response.safest.coordinates)
+                        .stroke(.white.opacity(0.85), style: StrokeStyle(lineWidth: 9, lineCap: .round, lineJoin: .round))
                     MapPolyline(coordinates: result.response.safest.coordinates)
                         .stroke(.green, style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
-                    ForEach(result.response.safest.riskEvents) { event in
+
+                    if !result.response.routesAreIdentical {
+                        ForEach(result.response.fastest.maneuverEvents) { event in
+                            Annotation(event.description, coordinate: event.coordinate, anchor: .center) {
+                                RiskEventMarker(
+                                    event: event,
+                                    isMuted: true,
+                                    isSelected: selectedEventKey == "fastest-\(event.id)"
+                                ) { toggleSelection("fastest-\(event.id)") }
+                            }
+                            .annotationTitles(.hidden)
+                        }
+                    }
+                    ForEach(result.response.safest.maneuverEvents) { event in
                         Annotation(event.description, coordinate: event.coordinate, anchor: .center) {
-                            RiskEventMarker(kind: event.kind)
+                            RiskEventMarker(
+                                event: event,
+                                isMuted: false,
+                                isSelected: selectedEventKey == "safest-\(event.id)"
+                            ) { toggleSelection("safest-\(event.id)") }
                         }
                         .annotationTitles(.hidden)
+                    }
+
+                    if let labelAnchors {
+                        Annotation("", coordinate: labelAnchors.safe, anchor: .bottom) {
+                            RouteLabel(
+                                text: result.response.routesAreIdentical
+                                    ? "Fastest is already the safest"
+                                    : "Safe · \(Int(result.response.safest.etaMinutes.rounded())) min",
+                                color: .green
+                            )
+                        }
+                        .annotationTitles(.hidden)
+                        if let fast = labelAnchors.fast {
+                            Annotation("", coordinate: fast, anchor: .bottom) {
+                                RouteLabel(
+                                    text: "Fastest · \(Int(result.response.fastest.etaMinutes.rounded())) min",
+                                    color: Color(white: 0.42)
+                                )
+                            }
+                            .annotationTitles(.hidden)
+                        }
                     }
                 }
 
@@ -47,6 +100,9 @@ struct MapScreen: View {
                     .tint(.red)
                 }
             }
+            .mapStyle(mapStyleChoice.mapStyle)
+            // Runs alongside MapKit's own gestures: a tap anywhere on the map puts the keyboard away.
+            .simultaneousGesture(TapGesture().onEnded { isSearchFocused = false })
             .safeAreaInset(edge: .top, spacing: 0) {
                 Color.clear
                     .frame(height: searchBarReserve)
@@ -56,26 +112,49 @@ struct MapScreen: View {
                 bottomPanel
             }
 
-            SearchBar(userLocation: locationManager.coordinate) { item in
-                model.selectDestination(item)
-                frameCamera(around: item.location.coordinate)
+            // Top-right cluster under the search field; drawn before SearchBar so its dropdown covers it.
+            GlassEffectContainer(spacing: 12) {
+                VStack(spacing: 12) {
+                    ProfilePicker(selection: $model.profile)
+                    MapStyleMenu(selection: $mapStyleChoice)
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.trailing, 16)
+            .padding(.top, searchBarReserve + 8)
+
+            SearchBar(
+                userLocation: locationManager.coordinate,
+                isFocused: $isSearchFocused,
+                onSelect: { item in
+                    model.selectDestination(item)
+                    frameCamera(around: item.location.coordinate)
+                    findRoute()
+                },
+                onClear: {
+                    model.clearDestination()
+                    recenterOnUser()
+                }
+            )
             .padding(.horizontal, 16)
             .padding(.top, 8)
         }
-        .mapScope(mapScope)
         .ignoresSafeArea(.keyboard)
         .onAppear {
+            model.profile = storedProfile
             locationManager.start()
             model.loadRiskGridIfNeeded()
         }
-        .onChange(of: model.profile) { _, _ in
-            // Re-request only if a route is showing or being fetched; otherwise wait for the button.
+        .onChange(of: model.profile) { _, profile in
+            storedProfile = profile
+            // Re-request with the new profile if a route is showing or being fetched.
             if model.result != nil || model.isLoading {
                 findRoute()
             }
         }
         .onChange(of: model.result) { _, result in
+            selectedEventKey = nil
+            labelAnchors = result.map { RouteLabelPlacement.anchors(for: $0.response) } ?? nil
             if let result {
                 fitCamera(to: result)
             }
@@ -86,20 +165,21 @@ struct MapScreen: View {
 
     private var bottomPanel: some View {
         VStack(alignment: .trailing, spacing: 12) {
-            HStack(spacing: 12) {
-                if model.isRiskGridAvailable {
-                    heatmapToggle
+            // One glass cluster: the controls merge visually when they sit this close.
+            GlassEffectContainer(spacing: 12) {
+                HStack(spacing: 12) {
+                    if model.isRiskGridAvailable {
+                        heatmapToggle
+                    }
+                    recenterButton
                 }
-                MapUserLocationButton(scope: mapScope)
             }
 
             if model.destination != nil {
-                ProfilePicker(selection: $model.profile)
-
                 if let result = model.result {
                     RouteSummaryCard(result: result, isReloading: model.isLoading)
-                } else {
-                    findRouteButton
+                } else if model.isLoading {
+                    loadingCard
                 }
             }
         }
@@ -107,25 +187,29 @@ struct MapScreen: View {
         .padding(.bottom, 8)
     }
 
-    private var findRouteButton: some View {
+    private var recenterButton: some View {
         Button {
-            findRoute()
+            recenterOnUser()
         } label: {
-            HStack(spacing: 8) {
-                if model.isLoading {
-                    ProgressView()
-                } else {
-                    Image(systemName: "shield.checkered")
-                }
-                Text(model.isLoading ? "Finding safest route…" : "Find safest route")
-            }
-            .font(.headline)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 6)
+            Image(systemName: "location.fill")
+                .font(.title3.weight(.semibold))
+                .frame(width: 44, height: 44)
+                .glassEffect(.regular.interactive(), in: .circle)
         }
-        .buttonStyle(.glass)
-        .controlSize(.large)
-        .disabled(model.isLoading)
+        .buttonStyle(.plain)
+        .accessibilityLabel("Recenter on my location")
+    }
+
+    /// Shown in place of the summary card while the first route for a destination is loading.
+    private var loadingCard: some View {
+        HStack(spacing: 12) {
+            ProgressView()
+            Text("Finding safest route…")
+                .font(.headline)
+            Spacer()
+        }
+        .padding(16)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
     private var heatmapToggle: some View {
@@ -143,10 +227,11 @@ struct MapScreen: View {
                 Text("Risk map")
             }
             .font(.subheadline.weight(.semibold))
-            .padding(.horizontal, 4)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 16)
+            .frame(height: 44)
+            .glassEffect(.regular.interactive(), in: .capsule)
         }
-        .buttonStyle(.glass)
+        .buttonStyle(.plain)
         .disabled(model.riskBands == nil)
         .accessibilityLabel(model.showsRiskHeatmap ? "Hide risk map" : "Show risk map")
     }
@@ -155,6 +240,22 @@ struct MapScreen: View {
 
     private func findRoute() {
         model.findRoute(from: locationManager.coordinate)
+    }
+
+    private func toggleSelection(_ key: String) {
+        selectedEventKey = selectedEventKey == key ? nil : key
+    }
+
+    /// Animates back to the user. `.userLocation` only moves on a new fix, so a stationary phone
+    /// would not budge; centering on the last known coordinate always animates.
+    private func recenterOnUser() {
+        withAnimation(.easeInOut(duration: 0.6)) {
+            if let user = locationManager.coordinate {
+                cameraPosition = .region(MKCoordinateRegion(center: user, latitudinalMeters: 1_500, longitudinalMeters: 1_500))
+            } else {
+                cameraPosition = .userLocation(fallback: .region(Config.austinRegion))
+            }
+        }
     }
 
     /// Zooms to show the destination and, when known, the user's location.
@@ -190,25 +291,50 @@ struct MapScreen: View {
     }
 }
 
-/// Small circular marker for one hazard on the safest route.
+/// Small circular marker for one maneuver hazard. Muted (small, gray) for the fastest route,
+/// colored for the safest. Tapping toggles a bubble with the event's description.
 private struct RiskEventMarker: View {
-    let kind: RiskEventType
+    let event: RiskEvent
+    var isMuted: Bool
+    var isSelected: Bool
+    var onTap: () -> Void
+
+    private var size: CGFloat { isMuted ? 16 : 22 }
 
     var body: some View {
-        Image(systemName: kind.symbolName)
-            .font(.system(size: 11, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(width: 22, height: 22)
-            .background(color, in: Circle())
-            .overlay(Circle().strokeBorder(.white, lineWidth: 1.5))
-            .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+        Button(action: onTap) {
+            Image(systemName: event.kind.symbolName)
+                .font(.system(size: isMuted ? 8 : 11, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: size, height: size)
+                .background(color, in: Circle())
+                .overlay(Circle().strokeBorder(.white, lineWidth: isMuted ? 1 : 1.5))
+                .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .bottom) {
+            if isSelected {
+                Text(event.description)
+                    .font(.caption)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .frame(width: 240)
+                    .padding(.bottom, size + 6)
+                    .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .bottom)))
+            }
+        }
+        .animation(.snappy(duration: 0.2), value: isSelected)
+        .accessibilityLabel(event.description)
     }
 
     private var color: Color {
-        switch kind {
-        case .leftTurn, .quickExitTurn: .orange
-        case .leftTurnMajor, .highwayMerge, .highCrashZone: .red
-        case .unknown: .gray
+        if isMuted { return .gray }
+        switch event.kind {
+        case .leftTurn, .quickExitTurn: return .orange
+        case .leftTurnMajor, .highwayMerge, .highCrashZone: return .red
+        case .unknown: return .gray
         }
     }
 }

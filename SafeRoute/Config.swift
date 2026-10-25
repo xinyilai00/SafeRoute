@@ -20,6 +20,12 @@ nonisolated enum Config {
     /// 0.3 -> 3266 cells / 2504 polygons (1.3 MB), 0.4 -> 2310 / 1836, 0.5 -> 1472 / 1215, 0.6 -> 761 / 665.
     static let riskMinimum = 0.5
 
+    /// UserDefaults key (via @AppStorage) for the remembered profile.
+    static let profileStorageKey = "profile"
+
+    /// UserDefaults key (via @AppStorage) for the remembered map style.
+    static let mapStyleStorageKey = "mapStyle"
+
     /// `safety_weight` sent with every route request (0 = fastest, 1 = safest) until a slider exists.
     static let defaultSafetyWeight = 1.0
 
