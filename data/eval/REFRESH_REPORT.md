@@ -2,7 +2,7 @@
 
 ## Data
 - Crashes through **2026-10-09**: 232,847 geocoded, 9,622 grid squares.
-- New since the last build (crash ids not present in the previous download): **0** crashes.
+- New since the last build (crashes dated after the previous grid's data cutoff (2026-10-09)): **0** crashes.
 
 ## Checks
 - Similarity to previous grid: 1.0000 (need >= 0.95)
@@ -11,6 +11,6 @@
   - elderly: reroutes 22% of trips, +0.37 min, held-out crashes **-4.8%**
   - sensitive_passenger: reroutes 20% of trips, +0.28 min, held-out crashes **-3.8%**
   - teen: reroutes 18% of trips, +0.23 min, held-out crashes **-4.1%**
-- Unit tests: 63 passed, 2 warnings in 3.56s
+- Unit tests: 71 passed, 2 warnings in 5.75s
 
 _Pass/fail is decided by fixed numeric thresholds in `data/refresh.py`; see its docstring._
