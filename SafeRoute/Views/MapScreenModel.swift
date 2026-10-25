@@ -47,6 +47,8 @@ final class MapScreenModel {
     @ObservationIgnored private let riskService = RiskService()
     @ObservationIgnored private var routeTask: Task<Void, Never>?
     @ObservationIgnored private var riskTask: Task<Void, Never>?
+    /// The "My Location" place a swap created, so swapping back restores the live user location as the start.
+    @ObservationIgnored private var userLocationItem: MKMapItem?
 
     /// Fetches GET /risk the first time it is called; later calls are no-ops.
     func loadRiskGridIfNeeded() {
@@ -77,6 +79,7 @@ final class MapScreenModel {
 
     /// Swaps start and destination. When the start is the user's location, the destination becomes a
     /// "My Location" place at the user's position as of now; without a position the swap is skipped.
+    /// Swapping back turns that place into the live user location again, so the start is My Location (not a preview).
     func swapEndpoints(userLocation: CLLocation?) {
         guard let destination else { return }
         let newDestination: MKMapItem
@@ -86,8 +89,9 @@ final class MapScreenModel {
             guard let userLocation else { return }
             newDestination = MKMapItem(location: userLocation, address: nil)
             newDestination.name = "My Location"
+            userLocationItem = newDestination
         }
-        origin = destination
+        origin = destination === userLocationItem ? nil : destination
         self.destination = newDestination
     }
 
@@ -96,6 +100,7 @@ final class MapScreenModel {
         routeTask?.cancel()
         origin = nil
         destination = nil
+        userLocationItem = nil
         result = nil
         isLoading = false
         isOutsideCoverage = false

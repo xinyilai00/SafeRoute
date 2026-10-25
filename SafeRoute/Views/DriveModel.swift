@@ -7,13 +7,23 @@ import CoreLocation
 import Foundation
 import Observation
 
-/// Where the drive-mode camera looks: over the driver, turned to the direction of travel.
+/// Where the drive-mode camera looks: a point on the route ahead of the car, turned to the route's direction.
 nonisolated struct DriveCamera: Equatable {
     var latitude: Double
     var longitude: Double
     var heading: Double
 
     var center: CLLocationCoordinate2D { CLLocationCoordinate2D(latitude: latitude, longitude: longitude) }
+}
+
+/// The car's position and direction for the on-map arrow.
+nonisolated struct DriveCar: Equatable {
+    var latitude: Double
+    var longitude: Double
+    /// Degrees clockwise from north.
+    var bearing: Double
+
+    var coordinate: CLLocationCoordinate2D { CLLocationCoordinate2D(latitude: latitude, longitude: longitude) }
 }
 
 /// Numbers for the bottom bar.
@@ -40,6 +50,8 @@ final class DriveModel {
     private(set) var route: Route
     private(set) var progress: DriveProgress
     private(set) var camera: DriveCamera?
+    /// Where to draw the car arrow; snapped to the route when close to it.
+    private(set) var car: DriveCar?
     private(set) var isMuted = false
     /// Increments with every alert (spoken or not), driving the haptic.
     private(set) var alertCount = 0
@@ -59,14 +71,21 @@ final class DriveModel {
     /// Simulated drives run this many times faster than the route's own ETA implies.
     private static let simulationSpeedFactor = 4.0
     private static let simulationTick: TimeInterval = 0.5
+    /// The camera heading is the route's direction over this many meters ahead, so it does not jitter at vertices.
+    private static let headingLookAheadMeters = 50.0
+    /// The camera looks at the route this far ahead of the car, which puts the car in the lower third of the screen.
+    private static let centerAheadMeters = 80.0
+    /// Within this distance of the route the car and camera are snapped onto it.
+    private static let snapMeters = 30.0
 
     init(route: Route, destination: CLLocationCoordinate2D, simulated: Bool = false) {
         isSimulated = simulated
         self.route = route
         progress = DriveProgress(route: route, destination: destination)
-        // Until the first fix arrives, look at the start of the route, facing down it.
+        // Until the first fix arrives, the car sits at the start of the route, facing down it.
         if let start = progress.track.position(atDistance: 0) {
-            camera = DriveCamera(latitude: start.latitude, longitude: start.longitude, heading: start.bearing)
+            car = DriveCar(latitude: start.latitude, longitude: start.longitude, bearing: start.bearing)
+            camera = cameraOnRoute(at: start)
         }
         if simulated {
             startSimulation()
@@ -113,11 +132,23 @@ final class DriveModel {
         lastLocation = location
         let alerts = progress.update(with: location.coordinate)
         if let projected = progress.position {
+            let onRoute = projected.offRouteMeters <= Self.snapMeters
             // GPS course is unreliable when slow or missing; the route's own direction stands in for it.
-            let heading = (location.course >= 0 && location.speed >= 2) ? location.course : projected.bearing
-            // Snap to the route when close so the camera glides along the line instead of jittering beside it.
-            let center = projected.offRouteMeters <= 30 ? projected.coordinate : location.coordinate
-            camera = DriveCamera(latitude: center.latitude, longitude: center.longitude, heading: heading)
+            let courseIsUsable = location.course >= 0 && location.speed >= 2
+            let carCoordinate = onRoute ? projected.coordinate : location.coordinate
+            car = DriveCar(
+                latitude: carCoordinate.latitude,
+                longitude: carCoordinate.longitude,
+                bearing: courseIsUsable ? location.course : projected.bearing
+            )
+            if onRoute {
+                camera = cameraOnRoute(at: projected)
+            } else {
+                // Off the route: keep the last heading unless the GPS course is trustworthy, and look ahead of the car.
+                let heading = courseIsUsable ? location.course : (camera?.heading ?? projected.bearing)
+                let center = RouteTrack.coordinate(from: location.coordinate, meters: Self.centerAheadMeters, bearing: heading)
+                camera = DriveCamera(latitude: center.latitude, longitude: center.longitude, heading: heading)
+            }
         }
         for alert in alerts {
             announce(alert)
@@ -128,6 +159,15 @@ final class DriveModel {
                 isFinished = true
             }
         }
+    }
+
+    /// Camera for a car on the route: turned to the route's direction over the next 50 m, looking at the
+    /// point 80 m further along it, so the road ahead runs up the middle with the car in the lower third.
+    private func cameraOnRoute(at position: RouteTrack.Position) -> DriveCamera {
+        let track = progress.track
+        let heading = track.smoothedBearing(atDistance: position.distanceAlong, lookAhead: Self.headingLookAheadMeters) ?? position.bearing
+        let center = track.position(atDistance: position.distanceAlong + Self.centerAheadMeters)?.coordinate ?? position.coordinate
+        return DriveCamera(latitude: center.latitude, longitude: center.longitude, heading: heading)
     }
 
     /// A rerouted result arrived: follow it from here.

@@ -29,6 +29,9 @@ struct MapScreen: View {
     @Namespace private var mapScope
     /// Non-nil while drive mode is on.
     @State private var drive: DriveModel?
+    /// Car arrow and the map heading it is drawn against; both move inside the camera animation so the arrow glides with the map.
+    @State private var car: DriveCar?
+    @State private var cameraHeading: Double = 0
 
     private var isDriving: Bool { drive != nil }
 
@@ -39,7 +42,10 @@ struct MapScreen: View {
     var body: some View {
         ZStack(alignment: .top) {
             Map(position: $cameraPosition, scope: mapScope) {
-                UserAnnotation()
+                // A simulated drive has its own car; the real blue dot would sit somewhere else entirely.
+                if drive?.isSimulated != true {
+                    UserAnnotation()
+                }
 
                 if model.showsRiskHeatmap, let bands = model.riskBands {
                     RiskHeatmapLayer(bands: bands, opacity: isDriving ? 0.35 : 1)
@@ -106,6 +112,13 @@ struct MapScreen: View {
                         coordinate: destination.location.coordinate
                     )
                     .tint(.red)
+                }
+
+                if let car {
+                    Annotation("", coordinate: car.coordinate, anchor: .center) {
+                        DriveCarMarker(rotation: car.bearing - cameraHeading)
+                    }
+                    .annotationTitles(.hidden)
                 }
             }
             .mapStyle(mapStyleChoice.mapStyle)
@@ -393,6 +406,7 @@ struct MapScreen: View {
     private func endDrive() {
         drive?.end()
         drive = nil
+        car = nil
         locationManager.endNavigationUpdates()
         UIApplication.shared.isIdleTimerDisabled = false
         if let result = model.result {
@@ -402,11 +416,15 @@ struct MapScreen: View {
         }
     }
 
-    /// Car-navigation framing: close in, tilted, turned to the direction of travel. The simulator ticks
-    /// twice a second, so its moves are linear and back to back; GPS fixes ease in.
+    /// Car-navigation framing: close in, tilted, turned to the route's direction, looking at a point ahead
+    /// of the car so the car arrow sits in the lower third. Fixes arrive about once a second on a real drive
+    /// and twice a second simulated; a linear move of the same length glides from one update into the next.
+    /// The car arrow moves in the same transaction so it stays put on screen while the map slides under it.
     private func follow(_ camera: DriveCamera) {
-        let animation: Animation = drive?.isSimulated == true ? .linear(duration: 0.5) : .easeInOut(duration: 0.6)
+        let animation: Animation = .linear(duration: drive?.isSimulated == true ? 0.5 : 1.0)
         withAnimation(animation) {
+            car = drive?.car
+            cameraHeading = camera.heading
             cameraPosition = .camera(MapCamera(centerCoordinate: camera.center, distance: 450, heading: camera.heading, pitch: 60))
         }
     }

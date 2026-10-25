@@ -164,3 +164,28 @@ struct DriveBottomBar: View {
     }
     .padding()
 }
+
+/// The car in drive mode: a navigation arrow in a blue puck. `rotation` is the car's bearing relative to the
+/// map's heading, so the arrow points where the car is going even while the camera turns.
+struct DriveCarMarker: View {
+    var rotation: Double
+
+    var body: some View {
+        Image(systemName: "location.north.fill")
+            .font(.system(size: 22, weight: .bold))
+            .foregroundStyle(.white)
+            .rotationEffect(.degrees(Self.normalized(rotation)))
+            .frame(width: 44, height: 44)
+            .background(.blue, in: Circle())
+            .overlay(Circle().strokeBorder(.white, lineWidth: 3))
+            .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
+            .allowsHitTesting(false)
+            .accessibilityLabel("Your car")
+    }
+
+    /// Into -180..<180 so the arrow turns the short way round.
+    private static func normalized(_ degrees: Double) -> Double {
+        let wrapped = (degrees + 180).truncatingRemainder(dividingBy: 360)
+        return (wrapped < 0 ? wrapped + 360 : wrapped) - 180
+    }
+}

@@ -139,20 +139,28 @@ struct SearchBar: View {
 
     // MARK: - From / To panel
 
+    /// Swap on the left, centered between the two rows and well away from the clear button on the To row.
     private func routePanel(_ endpoints: Endpoints) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
+            Button(action: onSwap) {
+                Image(systemName: "arrow.up.arrow.down")
+                    .font(.body.weight(.semibold))
+                    .frame(width: 36, height: 44)
+            }
+            .buttonStyle(.plain)
+            .disabled(!endpoints.canSwap)
+            .accessibilityLabel("Swap start and destination")
             VStack(spacing: 0) {
                 endpointRow(
                     .origin,
                     label: "From",
                     name: endpoints.originName ?? "My Location",
-                    symbol: endpoints.originName == nil ? "location.fill" : "mappin.circle.fill",
-                    tint: endpoints.originName == nil ? .blue : .red
+                    icon: endpoints.originName == nil ? .myLocation : .start
                 )
                 Divider()
                     .padding(.leading, 30)
                 HStack(spacing: 8) {
-                    endpointRow(.destination, label: "To", name: endpoints.destinationName, symbol: "mappin.circle.fill", tint: .red)
+                    endpointRow(.destination, label: "To", name: endpoints.destinationName, icon: .destination)
                     Button(action: onClear) {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(.secondary)
@@ -161,28 +169,40 @@ struct SearchBar: View {
                     .accessibilityLabel("Clear route")
                 }
             }
-            Button(action: onSwap) {
-                Image(systemName: "arrow.up.arrow.down")
-                    .font(.body.weight(.semibold))
-                    .frame(width: 40, height: 40)
-            }
-            .buttonStyle(.plain)
-            .disabled(!endpoints.canSwap)
-            .accessibilityLabel("Swap start and destination")
         }
-        .padding(.leading, 14)
-        .padding(.trailing, 6)
+        .padding(.leading, 6)
+        .padding(.trailing, 14)
         .padding(.vertical, 2)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
-    private func endpointRow(_ field: Field, label: String, name: String, symbol: String, tint: Color) -> some View {
+    /// Leading symbol of a panel row: blue location arrow for the user, green dot for a chosen start, red pin for the destination.
+    private enum EndpointIcon {
+        case myLocation, start, destination
+    }
+
+    @ViewBuilder
+    private func icon(_ icon: EndpointIcon) -> some View {
+        switch icon {
+        case .myLocation:
+            Image(systemName: "location.fill")
+                .foregroundStyle(.blue)
+        case .start:
+            Circle()
+                .fill(.green)
+                .frame(width: 12, height: 12)
+        case .destination:
+            Image(systemName: "mappin.circle.fill")
+                .foregroundStyle(.red)
+        }
+    }
+
+    private func endpointRow(_ field: Field, label: String, name: String, icon: EndpointIcon) -> some View {
         Button {
             beginEditing(field)
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: symbol)
-                    .foregroundStyle(tint)
+                self.icon(icon)
                     .frame(width: 20)
                 Text(label)
                     .font(.subheadline)

@@ -103,6 +103,27 @@ nonisolated struct RouteTrack {
         )
     }
 
+    /// Direction of travel averaged over the next `lookAhead` meters: the bearing from the point at
+    /// `distance` to the point `lookAhead` further on (clamped to the end). Unlike the segment bearing it
+    /// turns gradually through vertices, so a camera following it does not jerk at every corner.
+    func smoothedBearing(atDistance distance: Double, lookAhead: Double) -> Double? {
+        guard let from = position(atDistance: distance) else { return nil }
+        let aheadDistance = min(from.distanceAlong + lookAhead, totalMeters)
+        guard aheadDistance - from.distanceAlong > 1, let to = position(atDistance: aheadDistance) else { return from.bearing }
+        return Self.bearing(from: from.coordinate, to: to.coordinate)
+    }
+
+    /// The point `meters` away from `origin` in the direction `bearing` (degrees clockwise from north).
+    static func coordinate(from origin: CLLocationCoordinate2D, meters: Double, bearing: Double) -> CLLocationCoordinate2D {
+        let earthRadius = 6_371_000.0
+        let angular = meters / earthRadius
+        let heading = bearing * .pi / 180
+        let lat1 = origin.latitude * .pi / 180, lon1 = origin.longitude * .pi / 180
+        let lat2 = asin(sin(lat1) * cos(angular) + cos(lat1) * sin(angular) * cos(heading))
+        let lon2 = lon1 + atan2(sin(heading) * sin(angular) * cos(lat1), cos(angular) - sin(lat1) * sin(lat2))
+        return CLLocationCoordinate2D(latitude: lat2 * 180 / .pi, longitude: lon2 * 180 / .pi)
+    }
+
     /// Initial bearing from `a` to `b` in degrees clockwise from north, 0..<360.
     static func bearing(from a: CLLocationCoordinate2D, to b: CLLocationCoordinate2D) -> Double {
         let lat1 = a.latitude * .pi / 180, lat2 = b.latitude * .pi / 180
