@@ -1,6 +1,6 @@
 # data/ — CLAUDE.md
 
-Owner: Read the root `CLAUDE.md` first (product, API contract, folder ownership, git rules); this file only adds what is specific to `data/`.
+Owner: Xinyi. Read the root `CLAUDE.md` first (product, API contract, folder ownership, git rules); this file only adds what is specific to `data/`.
 
 ## What lives here
 
