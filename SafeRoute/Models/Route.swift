@@ -36,6 +36,14 @@ nonisolated struct Route: Decodable, Equatable {
 
     /// Events worth a marker: turns, merges and exits. High-crash zones are left to the heatmap.
     var maneuverEvents: [RiskEvent] { riskEvents.filter { $0.kind != .highCrashZone } }
+
+    /// Maneuver hazards on this route grouped by type, most frequent first, e.g. "2 busy left turns".
+    var maneuverHazardCounts: [HazardCount] {
+        let counts = maneuverEvents.reduce(into: [RiskEventType: Int]()) { $0[$1.kind, default: 0] += 1 }
+        return RiskEventType.allCases
+            .compactMap { kind in counts[kind].map { HazardCount(kind: kind, count: $0) } }
+            .sorted { $0.count > $1.count }
+    }
 }
 
 /// A hazard along a route.

@@ -6,10 +6,14 @@
 import CoreLocation
 import Foundation
 
-/// A decoded route response plus whether it came from `Mocks` instead of the backend.
+/// A decoded route response plus what the transport layer told us about it.
 nonisolated struct RouteResult: Equatable {
     let response: RouteResponse
     let isDemoData: Bool
+    /// `X-Live-Traffic: tomtom`: ETAs are traffic-aware.
+    var isLiveTraffic = false
+    /// `X-Closures-Skipped`: candidate routes the backend dropped for crossing a road closure.
+    var closuresSkipped = 0
 }
 
 /// Errors shared by the backend services.
@@ -53,10 +57,16 @@ nonisolated struct RouteService {
             request.httpBody = try encoder.encode(body)
 
             let (data, response) = try await URLSession.shared.data(for: request)
-            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            let http = response as? HTTPURLResponse
+            if let http, !(200..<300).contains(http.statusCode) {
                 throw BackendError.badStatus(http.statusCode)
             }
-            return RouteResult(response: try decoder.decode(RouteResponse.self, from: data), isDemoData: false)
+            return RouteResult(
+                response: try decoder.decode(RouteResponse.self, from: data),
+                isDemoData: false,
+                isLiveTraffic: http?.value(forHTTPHeaderField: "X-Live-Traffic")?.lowercased() == "tomtom",
+                closuresSkipped: http?.value(forHTTPHeaderField: "X-Closures-Skipped").flatMap { Int($0.trimmingCharacters(in: .whitespaces)) } ?? 0
+            )
         } catch let error as URLError where error.code == .cancelled {
             throw error
         } catch let error as CancellationError {

@@ -41,16 +41,16 @@ nonisolated struct RouteResponse: Decodable, Equatable {
     var routesAreIdentical: Bool { fastest.geometry == safest.geometry }
 
     /// Hazard types the safest route has fewer of than the fastest, most avoided first.
-    var avoidedHazards: [AvoidedHazard] {
+    var avoidedHazards: [HazardCount] {
         func counts(_ route: Route) -> [RiskEventType: Int] {
             route.riskEvents.reduce(into: [:]) { $0[$1.kind, default: 0] += 1 }
         }
         let fast = counts(fastest)
         let safe = counts(safest)
         return RiskEventType.allCases
-            .compactMap { kind -> AvoidedHazard? in
+            .compactMap { kind -> HazardCount? in
                 let difference = (fast[kind] ?? 0) - (safe[kind] ?? 0)
-                return difference > 0 ? AvoidedHazard(kind: kind, count: difference) : nil
+                return difference > 0 ? HazardCount(kind: kind, count: difference) : nil
             }
             .sorted { $0.count > $1.count }
     }
@@ -67,8 +67,8 @@ nonisolated struct RouteResponse: Decodable, Equatable {
     }
 }
 
-/// One hazard type the safe route has fewer of, with how many fewer.
-nonisolated struct AvoidedHazard: Identifiable {
+/// A hazard type with a count: how many a route has, or how many fewer the safe route has.
+nonisolated struct HazardCount: Identifiable {
     let kind: RiskEventType
     let count: Int
 
@@ -85,5 +85,42 @@ nonisolated struct RouteComparison: Decodable, Equatable {
         case minutesAdded = "minutes_added"
         case riskReductionPct = "risk_reduction_pct"
         case summary
+    }
+}
+
+/// Road-closure information the backend folds into `comparison.summary` and the `X-Closures-Skipped` header.
+nonisolated enum ClosureNote: Equatable {
+    /// The chosen route itself crosses a reported closure.
+    case crosses
+    /// The backend dropped this many candidate routes for crossing closures.
+    case avoids(Int)
+
+    var text: String {
+        switch self {
+        case .crosses: "This route crosses a reported road closure"
+        case .avoids(let count): "Avoids \(count) route\(count == 1 ? "" : "s") through road closures"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .crosses: "exclamationmark.triangle.fill"
+        case .avoids: "checkmark.circle.fill"
+        }
+    }
+}
+
+extension RouteResult {
+    /// Parsed from the summary text; falls back to the header count when the text says nothing.
+    var closureNote: ClosureNote? {
+        let summary = response.comparison.summary
+        if summary.localizedCaseInsensitiveContains("crosses a reported road closure") {
+            return .crosses
+        }
+        if let match = summary.firstMatch(of: #/avoids (\d+) routes? through road closures/#.ignoresCase()),
+           let count = Int(match.1), count > 0 {
+            return .avoids(count)
+        }
+        return closuresSkipped > 0 ? .avoids(closuresSkipped) : nil
     }
 }
