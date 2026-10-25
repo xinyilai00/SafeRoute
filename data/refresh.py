@@ -271,6 +271,45 @@ def run_tests() -> tuple[bool, str]:
     return r.returncode == 0, last
 
 
+def _grid_values(path: Path):
+    """{(ix, iy): numeric properties} of a grid, ignoring geometry and metadata (map projections differ in the last
+    digits between macOS and Linux, which would otherwise make every refresh look like a change)."""
+    if not path.exists():
+        return None
+    out = {}
+    for f in json.loads(path.read_text())["features"]:
+        p = f["properties"]
+        out[(p["ix"], p["iy"])] = tuple((k, round(v, 6)) for k, v in sorted(p.items()) if isinstance(v, (int, float)))
+    return out
+
+
+def artifacts_changed(prev_dir: Path, cur_dir: Path) -> list[str]:
+    """Names of the data artifacts whose MEANING changed (empty = nothing real changed).
+
+    Compares cell values, the set of signals, graded pavement segments, profile ratios and the weather
+    effect, so cosmetic differences (polygon coordinates, file order, timestamps) don't count.
+    """
+    changed = []
+
+    def load(d, name):
+        p = d / name
+        return json.loads(p.read_text()) if p.exists() else None
+
+    if _grid_values(prev_dir / "risk.geojson") != _grid_values(cur_dir / "risk.geojson"):
+        changed.append("risk grid")
+    a, b = load(prev_dir, "signals.json"), load(cur_dir, "signals.json")
+    if a is None or b is None or sorted(map(tuple, a)) != sorted(map(tuple, b)):
+        changed.append("signals")
+    a, b = load(prev_dir, "street_condition.json"), load(cur_dir, "street_condition.json")
+    key = lambda seg: (seg[0], seg[1], tuple(map(tuple, seg[2])))  # noqa: E731
+    if a is None or b is None or sorted(map(key, a)) != sorted(map(key, b)):
+        changed.append("street condition")
+    for name in ("profile_ratios.json", "weather_effect.json"):
+        if load(prev_dir, name) != load(cur_dir, name):
+            changed.append(name.removesuffix(".json").replace("_", " "))
+    return changed
+
+
 def changed_tracked() -> bool:
     paths = [str(Path("data") / rel) for rel in ARTIFACTS + ["history.json", "eval/REFRESH_REPORT.md"]]
     r = subprocess.run(["git", "status", "--porcelain", "--", *paths], cwd=HERE.parent, capture_output=True, text=True)
@@ -284,6 +323,8 @@ def render_report(entry: dict, fails: list, warns: list) -> str:
         L += ["## Rejected because", *[f"- {f}" for f in fails], ""]
     if warns:
         L += ["## Warnings", *[f"- {w}" for w in warns], ""]
+    if c.get("changed"):
+        L += ["## What changed", *[f"- {name}" for name in c["changed"]], ""]
     L += ["## Data", f"- Crashes through **{c['data_through'][:10]}**: {c['crashes']:,} geocoded, {c['cells']:,} grid squares."]
     if c.get("new_crashes_note"):
         L.append(f"- New since the last build ({c['new_crashes_note']}): **{c['forward']['n']:,}** crashes.")
@@ -320,6 +361,7 @@ def main() -> int:
     ap.add_argument("--skip-download", action="store_true")
     ap.add_argument("--skip-tests", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--force", action="store_true", help="record the run even when nothing material changed")
     args = ap.parse_args()
 
     history = json.loads(HISTORY.read_text()) if HISTORY.exists() else []
@@ -379,10 +421,21 @@ def finish(args, entry, fails, warns, history, accepted: bool) -> int:
         entry["reasons"] = fails
     if warns:
         entry["warnings"] = warns
+    changed = []
+    if accepted and "backtest_detail" in entry:  # a full run (not a download/rebuild failure)
+        changed = artifacts_changed(BACKUP, HERE)
+        entry["changed"] = changed
     text = render_report(entry, fails, warns)
     if not accepted:
         restore()
     print("\n" + text)
+    if accepted and "backtest_detail" in entry and not changed and not args.force:
+        restore()  # undo cosmetic noise (polygon digits, file order, re-run evaluation files)
+        print("no material change: nothing new in the data, so all files were restored and nothing was written")
+        if args.ci and os.environ.get("GITHUB_OUTPUT"):
+            with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                f.write("status=accepted\nchanged=false\n")
+        return 0
     if args.dry_run:
         restore()
         print("dry run: all files restored, nothing written")
@@ -398,7 +451,7 @@ def finish(args, entry, fails, warns, history, accepted: bool) -> int:
         out = os.environ.get("GITHUB_OUTPUT")
         if out:
             with open(out, "a") as f:
-                f.write(f"status={entry['status']}\nchanged={'true' if accepted and changed_tracked() else 'false'}\n")
+                f.write(f"status={entry['status']}\nchanged={'true' if accepted and bool(changed) else 'false'}\n")
     return 0 if accepted else 1
 
 

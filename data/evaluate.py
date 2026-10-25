@@ -345,7 +345,7 @@ def main() -> None:
     print(f"{len(trips)} trips; scoring with the grid built from crashes through {TRAIN_UNTIL}")
     held = HeldOut()
     df = evaluate(trips, held)
-    df.to_csv(OUT / "results.csv", index=False)
+    df.to_csv(OUT / "results.csv", index=False, float_format="%.4f")
     (OUT / "metrics.json").write_text(json.dumps(compute_metrics(df, held.n), indent=2))
     text = summarize(df, held.n)
     header = (f"# Router evaluation ({len(trips)} trips x {len(PROFILES)} profiles = {len(df)} cases)\n\n"

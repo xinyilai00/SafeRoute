@@ -173,3 +173,58 @@ def test_rolling_backtest_and_forward_check_run_on_real_data():
     prev = json.loads(R.GRID.read_text())
     cells, _ = R.new_crash_cells(prev)
     assert isinstance(cells, list)
+
+
+# ---------- "did anything real change?" (cosmetic differences must not trigger a pull request) ----------
+
+def _write_artifacts(d, grid_coords=0.0, signals=None, pave=None, ratios=None, weather=None, risk=0.5, built="2026-10-25"):
+    d.mkdir(parents=True, exist_ok=True)
+    feats = [{"type": "Feature", "properties": {"ix": i, "iy": 0, "risk": risk if i == 3 else 0.1, "left_risk": 0.0,
+                                                "risk_teen": 0.1, "risk_elderly": 0.1},
+              "geometry": {"type": "Polygon", "coordinates": [[[i + grid_coords, 0.0], [i + 1, 0.0], [i, 1.0]]]}} for i in range(10)]
+    (d / "risk.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": feats, "meta": {"built_at": built}}))
+    (d / "signals.json").write_text(json.dumps(signals or [[-97.7, 30.2], [-97.8, 30.3], [-97.6, 30.1]]))
+    (d / "street_condition.json").write_text(json.dumps(pave or [["F", 500, [[-97.7, 30.2], [-97.71, 30.21]]], ["A", 90, [[-97.8, 30.3], [-97.81, 30.31]]]]))
+    (d / "profile_ratios.json").write_text(json.dumps(ratios or {"teen": {"ratios": {"left-turn": 0.96}}}))
+    (d / "weather_effect.json").write_text(json.dumps(weather or {"all": {"wet": {"ratio": 1.43}}}))
+
+
+def test_cosmetic_differences_are_not_a_change(tmp_path):
+    prev, cur = tmp_path / "prev", tmp_path / "cur"
+    _write_artifacts(prev)
+    # different polygon digits (macOS vs Linux projections), different build time, signals and pavement reordered
+    _write_artifacts(cur, grid_coords=1e-9, built="2026-11-01",
+                     signals=[[-97.6, 30.1], [-97.7, 30.2], [-97.8, 30.3]],
+                     pave=[["A", 90, [[-97.8, 30.3], [-97.81, 30.31]]], ["F", 500, [[-97.7, 30.2], [-97.71, 30.21]]]])
+    assert R.artifacts_changed(prev, cur) == []
+
+
+@pytest.mark.parametrize("override, expect", [
+    ({"risk": 0.6}, "risk grid"),
+    ({"signals": [[-97.7, 30.2], [-97.8, 30.3]]}, "signals"),
+    ({"pave": [["F", 500, [[-97.7, 30.2], [-97.71, 30.21]]], ["D", 90, [[-97.8, 30.3], [-97.81, 30.31]]]]}, "street condition"),
+    ({"ratios": {"teen": {"ratios": {"left-turn": 1.05}}}}, "profile ratios"),
+    ({"weather": {"all": {"wet": {"ratio": 1.5}}}}, "weather effect"),
+])
+def test_real_differences_are_detected(tmp_path, override, expect):
+    prev, cur = tmp_path / "prev", tmp_path / "cur"
+    _write_artifacts(prev)
+    _write_artifacts(cur, **override)
+    assert R.artifacts_changed(prev, cur) == [expect]
+
+
+def test_grid_cell_added_or_missing_file_counts_as_change(tmp_path):
+    prev, cur = tmp_path / "prev", tmp_path / "cur"
+    _write_artifacts(prev)
+    _write_artifacts(cur)
+    g = json.loads((cur / "risk.geojson").read_text())
+    g["features"].pop()                                           # a square disappears
+    (cur / "risk.geojson").write_text(json.dumps(g))
+    assert "risk grid" in R.artifacts_changed(prev, cur)
+    (cur / "signals.json").unlink()                               # a missing file is a change, not a crash
+    assert "signals" in R.artifacts_changed(prev, cur)
+
+
+def test_signals_builder_output_is_sorted():
+    src = (Path(__file__).parent.parent / "build_signals.py").read_text()
+    assert "pts.sort()" in src

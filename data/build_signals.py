@@ -21,6 +21,7 @@ def main() -> None:
         "$select": "location", "$where": "signal_type='TRAFFIC' AND signal_status='TURNED_ON'", "$limit": 20000})
     rows = json.load(urllib.request.urlopen(f"{URL}?{query}", timeout=60))
     pts = [[round(c, 6) for c in r["location"]["coordinates"]] for r in rows if r.get("location")]
+    pts.sort()  # stable order so a re-download with the same signals produces an identical file
     OUT.write_text(json.dumps(pts, separators=(",", ":")))
     print(f"wrote {OUT} ({len(pts)} signals)")
 
