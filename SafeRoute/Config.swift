@@ -26,6 +26,10 @@ nonisolated enum Config {
     /// UserDefaults key (via @AppStorage) for the remembered map style.
     static let mapStyleStorageKey = "mapStyle"
 
+    /// UserDefaults keys (via @AppStorage) for the route options sent as `avoid`.
+    static let avoidTollsStorageKey = "avoidTolls"
+    static let avoidHighwaysStorageKey = "avoidHighways"
+
     /// `safety_weight` sent with every route request (0 = fastest, 1 = safest) until a slider exists.
     static let defaultSafetyWeight = 1.0
 

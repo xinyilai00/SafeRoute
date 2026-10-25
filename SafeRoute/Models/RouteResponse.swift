@@ -24,9 +24,11 @@ nonisolated struct RouteRequest: Encodable {
     let profile: Profile
     /// 0 = fastest, 1 = safest. Fixed at 1.0 until a slider exists.
     let safetyWeight: Double
+    /// `"tolls"` / `"highways"`. Nil (omitted from the JSON) when the user avoids nothing.
+    let avoid: [String]?
 
     enum CodingKeys: String, CodingKey {
-        case origin, destination, profile
+        case origin, destination, profile, avoid
         case safetyWeight = "safety_weight"
     }
 }
@@ -122,5 +124,36 @@ extension RouteResult {
             return .avoids(count)
         }
         return closuresSkipped > 0 ? .avoids(closuresSkipped) : nil
+    }
+
+    /// The backend's "(couldn't avoid tolls: ...)" / "(couldn't fully avoid tolls (12% of the route))" note,
+    /// as a sentence without its outer parentheses. Nil when the avoid choice was fully honoured.
+    var avoidNote: String? {
+        let summary = response.comparison.summary
+        guard let match = summary.firstMatch(of: #/couldn't (fully )?avoid/#.ignoresCase()) else { return nil }
+        var note = String(summary[match.range.lowerBound...])
+        // The note is the last parenthetical; drop the closers that belong to parentheses opened before it.
+        var depth = 0
+        for character in note {
+            if character == "(" { depth += 1 } else if character == ")" { depth -= 1 }
+        }
+        while depth < 0, note.last == ")" {
+            note.removeLast()
+            depth += 1
+        }
+        note = note.trimmingCharacters(in: .whitespaces)
+        return note.isEmpty ? nil : note.prefix(1).uppercased() + note.dropFirst()
+    }
+
+    /// `comparison.summary` without the closure and avoid notes the backend appends in parentheses,
+    /// for use as a sentence when those notes are shown on their own lines.
+    var summaryWithoutNotes: String {
+        let summary = response.comparison.summary
+        let markers = [" (warning:", " (avoids ", " (couldn't"]
+        let cut = markers
+            .compactMap { summary.range(of: $0, options: .caseInsensitive)?.lowerBound }
+            .min()
+        guard let cut else { return summary }
+        return String(summary[..<cut]).trimmingCharacters(in: .whitespaces)
     }
 }

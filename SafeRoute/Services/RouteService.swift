@@ -14,6 +14,8 @@ nonisolated struct RouteResult: Equatable {
     var isLiveTraffic = false
     /// `X-Closures-Skipped`: candidate routes the backend dropped for crossing a road closure.
     var closuresSkipped = 0
+    /// `X-Avoid-Applied`: the avoid options the backend actually honoured.
+    var avoidApplied = AvoidOptions()
 }
 
 /// Errors shared by the backend services.
@@ -32,12 +34,13 @@ nonisolated struct RouteService {
         origin: CLLocationCoordinate2D,
         destination: CLLocationCoordinate2D,
         profile: Profile,
+        avoiding avoid: AvoidOptions = AvoidOptions(),
         safetyWeight: Double = Config.defaultSafetyWeight
     ) async throws -> RouteResult {
         guard Config.isBackendConfigured else {
             // Demo path: pause briefly so the loading state is visible; the mock would otherwise return instantly.
             try await Task.sleep(for: .milliseconds(700))
-            return try mockResult(for: profile)
+            return try mockResult(for: profile, avoiding: avoid)
         }
 
         do {
@@ -45,7 +48,8 @@ nonisolated struct RouteService {
                 origin: Coordinate(origin),
                 destination: Coordinate(destination),
                 profile: profile,
-                safetyWeight: safetyWeight
+                safetyWeight: safetyWeight,
+                avoid: avoid.isEmpty ? nil : avoid.wireValues
             )
             guard let url = URL(string: Config.baseURL + "/route") else { throw BackendError.badURL }
             var request = URLRequest(url: url, timeoutInterval: 10)
@@ -65,7 +69,8 @@ nonisolated struct RouteService {
                 response: try decoder.decode(RouteResponse.self, from: data),
                 isDemoData: false,
                 isLiveTraffic: http?.value(forHTTPHeaderField: "X-Live-Traffic")?.lowercased() == "tomtom",
-                closuresSkipped: http?.value(forHTTPHeaderField: "X-Closures-Skipped").flatMap { Int($0.trimmingCharacters(in: .whitespaces)) } ?? 0
+                closuresSkipped: http?.value(forHTTPHeaderField: "X-Closures-Skipped").flatMap { Int($0.trimmingCharacters(in: .whitespaces)) } ?? 0,
+                avoidApplied: AvoidOptions(header: http?.value(forHTTPHeaderField: "X-Avoid-Applied"))
             )
         } catch let error as URLError where error.code == .cancelled {
             throw error
@@ -74,12 +79,13 @@ nonisolated struct RouteService {
         } catch {
             if Task.isCancelled { throw error }
             print("RouteService: backend request failed, using demo data. \(error)")
-            return try mockResult(for: profile)
+            return try mockResult(for: profile, avoiding: avoid)
         }
     }
 
-    private func mockResult(for profile: Profile) throws -> RouteResult {
+    /// Demo data. Like the backend's fake provider, the mock routes ignore `avoid` but report it as applied.
+    private func mockResult(for profile: Profile, avoiding avoid: AvoidOptions) throws -> RouteResult {
         let response = try decoder.decode(RouteResponse.self, from: Mocks.routeResponseJSON(for: profile))
-        return RouteResult(response: response, isDemoData: true)
+        return RouteResult(response: response, isDemoData: true, avoidApplied: avoid)
     }
 }

@@ -70,9 +70,9 @@ final class MapScreenModel {
         isLoading = false
     }
 
-    /// Requests fastest + safest routes for the current destination and profile.
+    /// Requests fastest + safest routes for the current destination, profile and route options.
     /// `origin` is the user's location; when unavailable the UT Austin fallback keeps the demo working.
-    func findRoute(from origin: CLLocationCoordinate2D?) {
+    func findRoute(from origin: CLLocationCoordinate2D?, avoiding avoid: AvoidOptions = AvoidOptions()) {
         guard let destination else { return }
         routeTask?.cancel()
 
@@ -86,7 +86,8 @@ final class MapScreenModel {
                 let result = try await routeService.fetchRoute(
                     origin: originCoordinate,
                     destination: destinationCoordinate,
-                    profile: profile
+                    profile: profile,
+                    avoiding: avoid
                 )
                 guard !Task.isCancelled else { return }
                 self.result = result

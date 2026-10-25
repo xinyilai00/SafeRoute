@@ -49,11 +49,12 @@ struct RouteSummaryCard: View {
             addedTimeBadge
         }
 
-        Text(response.avoidanceSentence ?? response.comparison.summary)
+        Text(response.avoidanceSentence ?? result.summaryWithoutNotes)
             .font(.body)
             .fixedSize(horizontal: false, vertical: true)
 
         closureLine
+        avoidLines
 
         VStack(spacing: 10) {
             routeRow(name: "Safe route", color: .green, route: safest)
@@ -149,6 +150,23 @@ struct RouteSummaryCard: View {
         }
     }
 
+    /// What the backend avoided for the user (`X-Avoid-Applied`), and its warning when it could not
+    /// fully honour the choice, styled like the closure warning.
+    @ViewBuilder
+    private var avoidLines: some View {
+        if let avoided = result.avoidApplied.listText {
+            Label("Avoiding \(avoided)", systemImage: "slider.horizontal.3")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+        }
+        if let note = result.avoidNote {
+            Label(note, systemImage: "exclamationmark.triangle.fill")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     // MARK: - Same route
 
     @ViewBuilder
@@ -169,6 +187,7 @@ struct RouteSummaryCard: View {
         }
 
         closureLine
+        avoidLines
 
         HStack(spacing: 10) {
             Circle()
