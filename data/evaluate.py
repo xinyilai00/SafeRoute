@@ -10,9 +10,11 @@ Test design
   length groups (short 2-6 km, medium 6-15 km, long 15-25 km), fixed seed.
 * Routes: the full pipeline (GraphHopper alternatives, closure blocking, TomTom live times). Candidates
   are fetched once per trip and scored for each profile, since they don't depend on the profile.
-* The scoring grid is built ONLY from crashes through 2023 (TRAIN_UNTIL). "Safer" is then judged with an
-  INDEPENDENT measure: crashes from 2024 onward that the model never saw, counted within BUFFER_M of each
-  route. Judging with the model's own risk score would be circular, so that is reported only for reference.
+* The scoring grid and the segment rates are built ONLY from crashes through 2023 (TRAIN_UNTIL). "Safer" is then
+  judged with INDEPENDENT measures from crashes the model never saw (2024 onward): the realized crash rate per
+  vehicle-mile along each route (primary for the exposure model, see RealizedRisk) and the crashes counted within
+  BUFFER_M of the route (primary for the old grid model; it also rewards avoiding busy roads). Judging with the
+  model's own risk score would be circular, so that is reported only for reference.
 * Compared per trip and profile: fastest route vs the chosen safest route, plus two baselines:
     - "typical alternative": the average over the other candidates within the detour cap (is our pick
       better than just taking some other route?)
@@ -27,6 +29,7 @@ import argparse
 import csv
 import gzip
 import json
+from datetime import date
 import math
 import random
 import time
@@ -38,6 +41,7 @@ from shapely import STRtree
 from shapely.geometry import LineString
 
 import app as A  # loads .env (GraphHopper URL, TomTom key)
+import build_exposure as be
 import build_risk as b
 import live
 import routing
@@ -49,6 +53,8 @@ OUT = HERE / "eval"
 TRIPS_GZ = OUT / "trips.json.gz"  # compact copy of the fetched routes, committed so CI can re-score them
 TRAIN_UNTIL = 2023
 BUFFER_M = 30.0
+HELD_FIRST, HELD_LAST = TRAIN_UNTIL + 1, date.today().year - 1   # complete held-out years used for per-vehicle rates
+LOCAL_CLASS = 5   # route stretches with no TxDOT segment get this road class's pooled realized rate
 PROFILES = ("teen", "elderly", "sensitive_passenger")
 BUCKETS = (("short", 2.0, 6.0, 70), ("medium", 6.0, 15.0, 80), ("long", 15.0, 25.0, 50))  # quotas sum to 200
 SEED = 42
@@ -75,6 +81,12 @@ def use_train_grid() -> None:
         build_train_grid(path)
     scoring.RISK_PATH = path
     scoring._grid.cache_clear()
+    if be.SEGMENTS_PATH.exists():  # exposure model: segment rates from the same crashes (through TRAIN_UNTIL only)
+        rates = RAW / f"segment_rates_through_{TRAIN_UNTIL}.json"
+        if not rates.exists():
+            rates.write_text(json.dumps(be.build(TRAIN_UNTIL, be.PRIOR_M), separators=(",", ":")))
+        scoring.RATES_PATH = rates
+        scoring._segments.cache_clear()
 
 
 def sample_points() -> list[tuple[float, float]]:
@@ -152,17 +164,56 @@ class HeldOut:
                 "ksi": int(self.ksi[idx].sum()), "km": line.length / 1000.0}
 
 
+class RealizedRisk:
+    """Per-VEHICLE realized risk of a route from crashes the models never saw (HELD_FIRST..HELD_LAST).
+
+    For every route sample that matches a TxDOT segment: that segment's realized rate (held-out severity-weighted
+    crashes / held-out vehicle-miles) x distance. Samples that match no segment (mostly local streets, which have no
+    traffic counts) get the pooled realized rate of major collectors, the same for every route. Lower is safer.
+    """
+
+    def __init__(self):
+        self.attrs, lines = be.load_segments()
+        c = be.crash_frame(HELD_LAST, since=HELD_FIRST)
+        idx = be.match_crashes(lines, c)
+        obs = be.observed(c["weight"].to_numpy(), idx, len(self.attrs))
+        years = HELD_LAST - HELD_FIRST + 1
+        expo = self.attrs.adt.to_numpy() * self.attrs.miles.to_numpy() * 365.0 / 1e8 * years
+        self.rate = np.divide(obs, expo, out=np.zeros(len(obs)), where=expo > 0)
+        sel = self.attrs.F.to_numpy() == LOCAL_CLASS
+        self.local = float(obs[sel].sum() / expo[sel].sum())
+        self.crashes = int(len(c))
+        self.segs = None
+
+    def of(self, coords, road_classes) -> float:
+        if self.segs is None:
+            self.segs = scoring._segments()
+            if self.segs is None:
+                raise SystemExit("txdot_segments.json / segment rates missing: run build_txdot.py and build_exposure.py")
+        xy, cum = scoring._project(coords)
+        total = cum[-1]
+        n = max(int(np.ceil(total / scoring.STEP_M)), 1)
+        step = total / n
+        ds = (np.arange(n) + 0.5) * step
+        px, py = np.interp(ds, cum, xy[:, 0]), np.interp(ds, cum, xy[:, 1])
+        idx = np.minimum(np.searchsorted(cum, ds, side="right") - 1, len(cum) - 2)
+        hit = scoring._match_segments(px, py, scoring._highway_mask(len(xy), road_classes, idx), self.segs)
+        rate = np.where(hit >= 0, self.rate[np.maximum(hit, 0)], self.local)
+        return float((rate * step / scoring.METERS_PER_MILE).sum())
+
+
 # ---------------------------------------------------------------- evaluation
 
 cand_rows: list[dict] = []  # per candidate route, for the score-validity check
 
-def evaluate(trips: list[dict], held: HeldOut) -> pd.DataFrame:
+def evaluate(trips: list[dict], held: HeldOut, realized: "RealizedRisk | None" = None) -> pd.DataFrame:
     rows = []
     cand_rows.clear()
     for t in trips:
         cands = t["candidates"]
         for c in cands:
             c["held"] = held.along(c["coords"])
+            c["pv"] = realized.of(c["coords"], c.get("road_classes")) if realized else 0.0
         for prof in PROFILES:
             for c in cands:
                 c["score"], _ = scoring.score_route(c["coords"], prof, c["instructions"],
@@ -171,7 +222,7 @@ def evaluate(trips: list[dict], held: HeldOut) -> pd.DataFrame:
             if prof == PROFILES[0]:
                 for i, c in enumerate(cands):
                     cand_rows.append({"trip": t["id"], "cand": i, "model": c["score"], "held": c["held"]["weighted"],
-                                      "km": c["held"]["km"], "minutes": c["minutes"]})
+                                      "km": c["held"]["km"], "minutes": c["minutes"], "pv": c["pv"]})
             rules = A.ROUTING_RULES[prof]
             fast = min(cands, key=lambda c: c["minutes"])
             ours = A._pick_safest(cands, fast, 1.0, rules)
@@ -181,12 +232,12 @@ def evaluate(trips: list[dict], held: HeldOut) -> pd.DataFrame:
             def pack(prefix, r):
                 return {f"{prefix}_min": r["minutes"], f"{prefix}_km": r["held"]["km"], f"{prefix}_model": r["score"],
                         f"{prefix}_held": r["held"]["weighted"], f"{prefix}_held_n": r["held"]["crashes"],
-                        f"{prefix}_held_ksi": r["held"]["ksi"]}
+                        f"{prefix}_held_ksi": r["held"]["ksi"], f"{prefix}_pv": r["pv"]}
             row = {"trip": t["id"], "bucket": t["bucket"], "profile": prof, "live": t["live"],
                    "candidates": len(cands), "same": ours is fast, "minrisk_same": minrisk is fast,
                    **pack("fast", fast), **pack("ours", ours), **pack("minrisk", minrisk)}
-            for k in ("min", "model", "held", "held_n", "held_ksi"):
-                src = {"min": "minutes", "model": "score"}.get(k)
+            for k in ("min", "model", "held", "held_n", "held_ksi", "pv"):
+                src = {"min": "minutes", "model": "score", "pv": "pv"}.get(k)
                 vals = [(c[src] if src else c["held"][{"held": "weighted", "held_n": "crashes", "held_ksi": "ksi"}[k]]) for c in within]
                 row[f"alt_{k}"] = float(np.mean(vals)) if vals else np.nan
             rows.append(row)
@@ -207,37 +258,50 @@ def sign_test(wins: int, losses: int) -> float:
     return min(1.0, 2 * sum(math.comb(n, i) for i in range(k + 1)) / 2 ** n)
 
 
-def validity(cd: pd.DataFrame):
+def validity(cd: pd.DataFrame, truth: str = "held"):
     """(per-trip rank correlations, concordant pairs, tied pairs, comparable pairs) between a candidate's
     model score and its held-out crashes, over trips with 3+ candidates."""
     rhos, agree, ties, pairs = [], 0, 0, 0
     for _, g in cd.groupby("trip"):
         if len(g) < 3:
             continue
-        if g.model.nunique() > 1 and g.held.nunique() > 1:
-            rhos.append(g.model.rank().corr(g.held.rank()))
+        if g.model.nunique() > 1 and g[truth].nunique() > 1:
+            rhos.append(g.model.rank().corr(g[truth].rank()))
         for i in range(len(g)):
             for j in range(i + 1, len(g)):
                 a, c = g.iloc[i], g.iloc[j]
-                if a.model == c.model or a.held == c.held:
+                if a.model == c.model or a[truth] == c[truth]:
                     ties += 1
                     continue
                 pairs += 1
-                agree += (a.model < c.model) == (a.held < c.held)
+                agree += (a.model < c.model) == (a[truth] < c[truth])
     return rhos, agree, ties, pairs
 
 
 def compute_metrics(df: pd.DataFrame, held_n: int) -> dict:
-    """Headline numbers as plain JSON; refresh.py compares these with the previous run."""
-    rhos, agree, ties, pairs = validity(pd.DataFrame(cand_rows))
-    out = {"trips": int(df.trip.nunique()), "cases": int(len(df)), "held_out_crashes": int(held_n),
+    """Headline numbers as plain JSON; refresh.py compares these with the previous run.
+
+    `primary_metric` is what "safer" means for the active crash model: realized crashes per vehicle-mile ("pv") for the
+    exposure model, crashes counted along the route ("held") for the grid model. The gate uses primary_change_pct.
+    """
+    exposure = scoring._use_exposure() and scoring._segments() is not None
+    primary = "pv" if exposure else "held"
+    cd = pd.DataFrame(cand_rows)
+    rhos, agree, ties, pairs = validity(cd, primary)
+    _, agree_h, _, pairs_h = validity(cd, "held")
+    out = {"model": "exposure" if exposure else "grid", "primary_metric": primary, "trips": int(df.trip.nunique()),
+           "cases": int(len(df)), "held_out_crashes": int(held_n),
            "pair_concordance": round(agree / pairs, 4) if pairs else None,
+           "pair_concordance_crash_count": round(agree_h / pairs_h, 4) if pairs_h else None,
            "rank_corr": round(float(np.mean(rhos)), 4) if rhos else None, "profiles": {}}
     for prof, d in df.groupby("profile"):
+        pct = lambda a, b_: round(100 * float((d[a].sum() - d[b_].sum()) / max(d[b_].sum(), 1e-9)), 3)  # noqa: E731
         out["profiles"][prof] = {
             "changed_share": round(float((~d.same).mean()), 4),
             "minutes_added": round(float((d.ours_min - d.fast_min).mean()), 4),
-            "held_change_pct": round(100 * float((d.ours_held.sum() - d.fast_held.sum()) / d.fast_held.sum()), 3),
+            "held_change_pct": pct("ours_held", "fast_held"),
+            "pv_change_pct": pct("ours_pv", "fast_pv"),
+            "primary_change_pct": pct("ours_pv", "fast_pv") if exposure else pct("ours_held", "fast_held"),
             "ksi_change_pct": round(100 * float((d.ours_held_ksi.sum() - d.fast_held_ksi.sum()) / max(d.fast_held_ksi.sum(), 1)), 3)}
     return out
 
@@ -281,6 +345,13 @@ def summarize(df: pd.DataFrame, held_n: int) -> str:
           f"(sign test p = {sign_test(wins, losses):.3f}).")
         w(f"  - Serious/fatal held-out crashes: {d.fast_held_ksi.mean():.2f} -> {d.ours_held_ksi.mean():.2f} per trip "
           f"({100 * (d.ours_held_ksi.sum() - d.fast_held_ksi.sum()) / max(d.fast_held_ksi.sum(), 1):+.1f}%).")
+        if "fast_pv" in d and d.fast_pv.sum() > 0:
+            dpv = (d.ours_pv - d.fast_pv).to_numpy()
+            plo, phi = boot_ci(dpv, rng)
+            pw, pl = int((diff.ours_pv < diff.fast_pv).sum()), int((diff.ours_pv > diff.fast_pv).sum())
+            w(f"- **Realized per-vehicle risk** (held-out crashes per vehicle-mile along the route, TxDOT traffic counts): "
+              f"{100 * dpv.sum() / d.fast_pv.sum():+.1f}% overall (mean change {dpv.mean():+.1f}, 95% CI {plo:+.1f} to {phi:+.1f}); "
+              f"on changed trips safer on **{pw}**, worse on **{pl}** (sign test p = {sign_test(pw, pl):.3f}).")
         w(f"- Model risk score (circular, reference only): {100 * dm.sum() / d.fast_model.sum():+.1f}%.")
         alt = d.dropna(subset=["alt_held"])
         if len(alt):
@@ -299,6 +370,11 @@ def summarize(df: pd.DataFrame, held_n: int) -> str:
         lo, hi = boot_ci(np.array(rhos), rng)
         w(f"- Within a trip, rank correlation between a candidate's model score and its held-out crashes: mean **{np.mean(rhos):.2f}** "
           f"(95% CI {lo:.2f} to {hi:.2f}, {len(rhos)} trips with 3+ routes).")
+    if cand_rows and any(r.get("pv") for r in cand_rows):
+        _, agree_pv, ties_pv, pairs_pv = validity(pd.DataFrame(cand_rows), "pv")
+        if pairs_pv:
+            w(f"- Same check against realized per-vehicle risk: the lower model score also had the lower per-vehicle risk in "
+              f"**{agree_pv}/{pairs_pv} = {agree_pv / pairs_pv:.0%}** of pairs ({ties_pv} ties ignored).")
     if pairs:
         w(f"- For pairs of candidate routes for the same trip, the lower model score also had fewer held-out crashes in "
           f"**{agree}/{pairs} = {agree / pairs:.0%}** of pairs ({ties} tied pairs ignored; 50% would be chance).")
@@ -344,13 +420,16 @@ def main() -> None:
             json.dump(trips, f, separators=(",", ":"))
     print(f"{len(trips)} trips; scoring with the grid built from crashes through {TRAIN_UNTIL}")
     held = HeldOut()
-    df = evaluate(trips, held)
+    realized = RealizedRisk() if be.SEGMENTS_PATH.exists() else None
+    df = evaluate(trips, held, realized)
     df.to_csv(OUT / "results.csv", index=False, float_format="%.4f")
     (OUT / "metrics.json").write_text(json.dumps(compute_metrics(df, held.n), indent=2))
     text = summarize(df, held.n)
-    header = (f"# Router evaluation ({len(trips)} trips x {len(PROFILES)} profiles = {len(df)} cases)\n\n"
-              f"Grid built from crashes through {TRAIN_UNTIL}; \"safer\" judged by held-out crashes from "
-              f"{TRAIN_UNTIL + 1} on within {BUFFER_M:.0f} m of the route. Seed {args.seed}.\n\n")
+    model = "exposure (per-vehicle rates from TxDOT traffic counts)" if scoring._use_exposure() and scoring._segments() else "grid (crash counts per square)"
+    header = (f"# Router evaluation ({len(trips)} trips x {len(PROFILES)} profiles = {len(df)} cases)\n\nCrash model: {model}.\n\n"
+              f"Models built only from crashes through {TRAIN_UNTIL}; \"safer\" is judged on crashes from {TRAIN_UNTIL + 1} on that "
+              f"neither model saw: realized crashes per vehicle-mile along the route (the primary measure for the exposure "
+              f"model) and crashes counted within {BUFFER_M:.0f} m of the route (which also rewards avoiding busy roads). Seed {args.seed}.\n\n")
     (OUT / "REPORT.md").write_text(header + text + "\n")
     print("\n" + header + text)
     print(f"\nwrote {OUT / 'results.csv'} and {OUT / 'REPORT.md'}")

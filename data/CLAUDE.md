@@ -4,10 +4,10 @@ Owner: Read the root `CLAUDE.md` first (product, API contract, folder ownership,
 
 ## What lives here
 
-- `build_risk.py`: downloads the Austin Vision Zero crash CSV (Socrata `y2wy-tgr5`) into `raw/` (gitignored) and writes `risk.geojson`, a 200 m grid with `properties.risk` 0..1.
-- `scoring.py`: `crash_risk(geometry, profile)` (what `backend/` calls) and `score_route(...)` (crash risk plus maneuver penalties).
-- `app.py`, `routing.py`: a prototype `POST /route` + `GET /risk` on synthetic routes, a stopgap until Annikka's `backend/` has the real one. Delete or hand over once it does.
-- Still to build: the evaluation script comparing safest vs fastest on ~200 random trips (needs real GraphHopper routes).
+- **Data builders (write the data files, run offline):** `build_risk.py` (crash grid, `risk.geojson`), `calibrate_profiles.py` (teen/elderly crash-type ratios), `build_signals.py`, `build_pavement.py`, `analyze_weather.py`, `build_txdot.py` (compacts TxDOT's inventory; needs `raw/2025/`), `build_exposure.py` (per-segment crash rate per vehicle-mile), `calibrate_exposure.py` (one-off scale constant).
+- **Runtime:** `app.py` (`POST /route`, `GET /risk`, `GET /health`), `routing.py` (GraphHopper candidates, closures, avoid options), `live.py` (TomTom live times and closures), `scoring.py` (`crash_risk(geometry, profile)` and `score_route(...)`; exposure model by default, `RISK_MODEL=grid` for the old one), `weather.py` (Open-Meteo heads-up), `llm.py` (guarded Gemini helper, not wired in).
+- **Checks:** `backtest.py` (grid vs later crashes), `evaluate.py` (200-trip route evaluation, held-out crashes), `evaluate_exposure.py` (grid vs exposure model, per vehicle), `refresh.py` (self-updating pipeline and gate), `tests/`.
+- `app.py` and `routing.py` are a working prototype of `POST /route` until Annikka's `backend/` replaces it.
 
 ## Rules
 
@@ -19,7 +19,7 @@ Owner: Read the root `CLAUDE.md` first (product, API contract, folder ownership,
 
 ## Keeping it current
 
-`python refresh.py` (see README) downloads fresh data, rebuilds, and keeps the result only if the gate passes. `.github/workflows/data-refresh.yml` runs it weekly and opens a PR. Don't change the gate thresholds in `refresh.py` without telling the team.
+`python refresh.py` (see README) downloads fresh data, rebuilds (including the per-vehicle segment rates), and keeps the result only if the gate passes. `.github/workflows/data-refresh.yml` runs it weekly and opens a PR. Don't change the gate thresholds in `refresh.py` without telling the team.
 
 ## Run
 

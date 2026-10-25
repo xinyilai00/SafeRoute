@@ -19,6 +19,7 @@ meant to be combined as `eta_minutes + w * risk_score`. hazards is a list of dic
 {type, lat, lon, distance_m, points, description} the UI can pin on the map.
 """
 import json
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -237,24 +238,121 @@ def _signalized(x, y):
     return bool(len(sig) and np.min(np.hypot(sig[:, 0] - x, sig[:, 1] - y)) <= SIGNAL_RADIUS_M)
 
 
-def _crash_component(xy, cum, w, seg_factor=None, layer=0):
-    """Walk the line, sample the grid every STEP_M, length-weighted. -> (points, events)."""
+# ---- exposure model: crash rate per VEHICLE-MILE from TxDOT traffic counts (see build_exposure.py) ----
+# The grid counts crashes per 200 m square, and busy roads simply have more of them. Where a route stretch
+# matches a TxDOT road segment with a real traffic count (highways, arterials, collectors), the exposure
+# model scores it by that segment's rate per vehicle-mile instead. Elsewhere (mostly local streets, which
+# have no real traffic counts) the grid is used as before. Switch with RISK_MODEL=grid|exposure.
+SEGMENTS_PATH = Path(__file__).parent / "txdot_segments.json"
+RATES_PATH = Path(__file__).parent / "segment_rates.json"
+DEFAULT_RISK_MODEL = "exposure"   # per-vehicle rates where TxDOT has traffic counts; RISK_MODEL=grid for the old crash-count grid
+SEG_MATCH_M = 15.0            # a route sample this close to a TxDOT segment takes that segment's rate
+METERS_PER_MILE = 1609.344
+# Points per mile for one unit of rate (severity-weighted crashes per 100M vehicle-miles). Calibrated so that the
+# average minor-arterial / collector stretch scores the same under both models (see calibrate_exposure.py), which
+# keeps the two parts of a route on one scale. Highways then score far lower per mile because their measured
+# per-vehicle rate is far lower.
+EXPOSURE_POINTS_PER_RATE = 0.0846
+HOT_SEGMENT_RATIO = 2.0       # flag a segment whose rate is at least this many times its road class's average
+
+
+def _use_exposure() -> bool:
+    return os.environ.get("RISK_MODEL", DEFAULT_RISK_MODEL).lower() == "exposure"
+
+
+@lru_cache(maxsize=1)
+def _segments():
+    """TxDOT segments with per-vehicle crash rates, as an STRtree in UTM metres; None if the files are missing."""
+    try:
+        from shapely import STRtree
+        from shapely.geometry import LineString
+        data = json.loads(SEGMENTS_PATH.read_text())["segments"]
+        rates = json.loads(RATES_PATH.read_text())
+    except Exception:
+        return None
+    if len(rates.get("rate", [])) != len(data):
+        return None                                  # rates were built for a different segment file
+    to_utm = _to_utm()
+    lines = []
+    for seg in data:
+        xs, ys = to_utm.transform([c[0] for c in seg[7]], [c[1] for c in seg[7]])
+        lines.append(LineString(list(zip(xs, ys))))
+    klass = np.array([seg[0] for seg in data])
+    class_rate = {int(k): v for k, v in rates["meta"]["class_rate_per_100M_vmt"].items()}
+    return {"tree": STRtree(lines), "F": klass, "speed": np.array([seg[2] for seg in data]),
+            "lanes": np.array([seg[3] for seg in data]),
+            "rate": {"general": np.array(rates["rate"]), "teen": np.array(rates["teen"]), "elderly": np.array(rates["elderly"])},
+            "class_rate": np.array([class_rate.get(int(f), np.nan) for f in klass])}
+
+
+def _exposure_model(profile_name):
+    """What _crash_component needs for the exposure model, or None when it is off or unavailable."""
+    if not _use_exposure():
+        return None
+    segs = _segments()
+    return None if segs is None else {"seg": segs, "which": profile_name if profile_name in ("teen", "elderly") else "general"}
+
+
+def _match_segments(px, py, hw_mask, segs):
+    """Index of the TxDOT segment under each sample point (-1 = none).
+
+    Frontage roads run beside freeways, so a sample on a road GraphHopper does NOT call motorway/trunk is not
+    allowed to take a freeway-class segment's rate (class 1 or 2).
+    """
+    from shapely import points
+    q, t = segs["tree"].query_nearest(points(px, py), max_distance=SEG_MATCH_M, all_matches=False)
+    out = np.full(len(px), -1, dtype=int)
+    out[q] = t
+    if hw_mask is not None:
+        freeway = np.isin(segs["F"][np.maximum(out, 0)], (1, 2)) & (out >= 0)
+        out[freeway & ~hw_mask] = -1
+    return out
+
+
+def _highway_mask(n_vertices, road_classes, step_idx):
+    """Per sample: does GraphHopper call this stretch motorway/trunk? None when no road classes were given."""
+    if not road_classes:
+        return None
+    on = np.zeros(max(n_vertices - 1, 0), dtype=bool)
+    for a, b, kind in road_classes:
+        if str(kind).lower() in HIGHWAY_CLASSES:
+            on[a:b] = True
+    return on[step_idx]
+
+
+def _crash_component(xy, cum, w, seg_factor=None, layer=0, expo=None, road_classes=None):
+    """Walk the line, sample every STEP_M, length-weighted. -> (points, events).
+
+    Grid model: points = crash_weight x sum(cell risk x factor x step / 200 m). With `expo` (exposure model),
+    samples that match a TxDOT segment use that segment's rate per vehicle-mile instead.
+    """
     cells, cell_m, _ = _grid()
     seg_len = np.diff(cum)
     total = cum[-1]
-
-    def at(d):
-        d = min(max(d, 0.0), total)
-        i = min(int(np.searchsorted(cum, d, side="right")) - 1, len(seg_len) - 1)
-        t = (d - cum[i]) / seg_len[i] if seg_len[i] > 0 else 0.0
-        return xy[i] + t * (xy[i + 1] - xy[i]), i
-
-    crash, hazards, flagged = 0.0, [], set()
     n = max(int(np.ceil(total / STEP_M)), 1)
     step = total / n
+    ds = (np.arange(n) + 0.5) * step
+    px, py = np.interp(ds, cum, xy[:, 0]), np.interp(ds, cum, xy[:, 1])
+    idx = np.minimum(np.searchsorted(cum, ds, side="right") - 1, len(seg_len) - 1)
+    hit = None
+    if expo is not None:
+        hit = _match_segments(px, py, _highway_mask(len(xy), road_classes, idx), expo["seg"])
+    crash, crash_expo, hazards, flagged = 0.0, 0.0, [], set()
     for k in range(n):
-        d = (k + 0.5) * step
-        (x, y), i = at(d)
+        x, y, i, d = px[k], py[k], idx[k], ds[k]
+        j = hit[k] if hit is not None else -1
+        if j >= 0:
+            segs = expo["seg"]
+            rate = segs["rate"][expo["which"]][j]
+            crash_expo += EXPOSURE_POINTS_PER_RATE * rate * step / METERS_PER_MILE
+            ratio = rate / segs["class_rate"][j] if segs["class_rate"][j] > 0 else 0.0
+            if ratio >= HOT_SEGMENT_RATIO and ("seg", int(j)) not in flagged:
+                flagged.add(("seg", int(j)))
+                lon, lat = _to_utm().transform(x, y, direction="INVERSE")
+                hazards.append(dict(type="high_crash_zone", lat=lat, lon=lon, distance_m=round(d),
+                                    points=round(EXPOSURE_POINTS_PER_RATE * rate * cell_m / METERS_PER_MILE, 2),
+                                    description=f"Crash rate {ratio:.1f}x the usual for this type of road"))
+            continue
         risk = _lookup(cells, cell_m, x, y)[layer] * (seg_factor[i] if seg_factor is not None else 1.0)
         crash += risk * step / cell_m
         cell = (int(np.floor(x / cell_m)), int(np.floor(y / cell_m)))
@@ -264,7 +362,7 @@ def _crash_component(xy, cum, w, seg_factor=None, layer=0):
             hazards.append(dict(type="high_crash_zone", lat=lat, lon=lon, distance_m=round(d),
                                 points=round(risk * w["crash"], 2),
                                 description=f"High crash-density area (risk {risk:.2f})"))
-    return crash * w["crash"], hazards
+    return crash * w["crash"] + crash_expo, hazards
 
 
 # Raw crash counts over-penalise highways: they carry far more traffic, so a cell on I-35 has many
@@ -313,7 +411,7 @@ def crash_risk(polyline, profile="car", precision=5, road_classes=None, road_env
     if xy is None:
         return 0.0, []
     score, hazards = _crash_component(xy, cum, w, _segment_factors(len(xy), road_classes, road_environment),
-                                      PROFILE_LAYER.get(name, 0))
+                                      PROFILE_LAYER.get(name, 0), _exposure_model(name), road_classes)
     return round(float(score), 3), hazards
 
 
@@ -327,7 +425,7 @@ def score_route(polyline, profile="car", instructions=None, precision=5, road_cl
         return 0.0, []
     cells, cell_m, _ = _grid()
     score, hazards = _crash_component(xy, cum, w, _segment_factors(len(xy), road_classes, road_environment),
-                                      PROFILE_LAYER.get(name, 0))
+                                      PROFILE_LAYER.get(name, 0), _exposure_model(name), road_classes)
 
     # ---- ride comfort: smooth curving, for profiles that care ----
     curve_pts = w["curve"] * _curve_degrees(xy, cum)

@@ -7,10 +7,11 @@
 ## Checks
 - Similarity to previous grid: 1.0000 (need >= 0.95)
 - Rolling backtest (train through 2024, 20,101 test crashes): top-10% capture **58.9%** (floor 50%, chance 10%)
-- Route evaluation (200 cached trips, 32,182 held-out crashes): score/crash pair agreement **63%**
-  - elderly: reroutes 22% of trips, +0.37 min, held-out crashes **-4.8%**
-  - sensitive_passenger: reroutes 20% of trips, +0.28 min, held-out crashes **-3.8%**
-  - teen: reroutes 18% of trips, +0.23 min, held-out crashes **-4.1%**
-- Unit tests: 63 passed, 2 warnings in 3.56s
+- Route evaluation (200 cached trips, 32,182 held-out crashes): score/crash pair agreement **82%**
+  - crash model: exposure; 'safer' = realized crashes per vehicle-mile
+  - elderly: reroutes 28% of trips, +0.49 min, per-vehicle risk **-23.4%**
+  - sensitive_passenger: reroutes 26% of trips, +0.44 min, per-vehicle risk **-22.7%**
+  - teen: reroutes 22% of trips, +0.33 min, per-vehicle risk **-20.3%**
+- Unit tests: 94 passed, 2 warnings in 3.71s
 
 _Pass/fail is decided by fixed numeric thresholds in `data/refresh.py`; see its docstring._

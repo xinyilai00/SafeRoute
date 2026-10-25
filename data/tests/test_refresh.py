@@ -177,7 +177,7 @@ def test_rolling_backtest_and_forward_check_run_on_real_data():
 
 # ---------- "did anything real change?" (cosmetic differences must not trigger a pull request) ----------
 
-def _write_artifacts(d, grid_coords=0.0, signals=None, pave=None, ratios=None, weather=None, risk=0.5, built="2026-10-25"):
+def _write_artifacts(d, grid_coords=0.0, signals=None, pave=None, ratios=None, weather=None, risk=0.5, built="2026-10-25", seg_rate=100.0):
     d.mkdir(parents=True, exist_ok=True)
     feats = [{"type": "Feature", "properties": {"ix": i, "iy": 0, "risk": risk if i == 3 else 0.1, "left_risk": 0.0,
                                                 "risk_teen": 0.1, "risk_elderly": 0.1},
@@ -187,6 +187,8 @@ def _write_artifacts(d, grid_coords=0.0, signals=None, pave=None, ratios=None, w
     (d / "street_condition.json").write_text(json.dumps(pave or [["F", 500, [[-97.7, 30.2], [-97.71, 30.21]]], ["A", 90, [[-97.8, 30.3], [-97.81, 30.31]]]]))
     (d / "profile_ratios.json").write_text(json.dumps(ratios or {"teen": {"ratios": {"left-turn": 0.96}}}))
     (d / "weather_effect.json").write_text(json.dumps(weather or {"all": {"wet": {"ratio": 1.43}}}))
+    (d / "segment_rates.json").write_text(json.dumps({"meta": {}, "rate": [seg_rate, 12.0, 20.0], "teen": [seg_rate, 12.0, 20.0],
+                                                      "elderly": [seg_rate, 12.0, 20.0]}))
 
 
 def test_cosmetic_differences_are_not_a_change(tmp_path):
@@ -205,12 +207,22 @@ def test_cosmetic_differences_are_not_a_change(tmp_path):
     ({"pave": [["F", 500, [[-97.7, 30.2], [-97.71, 30.21]]], ["D", 90, [[-97.8, 30.3], [-97.81, 30.31]]]]}, "street condition"),
     ({"ratios": {"teen": {"ratios": {"left-turn": 1.05}}}}, "profile ratios"),
     ({"weather": {"all": {"wet": {"ratio": 1.5}}}}, "weather effect"),
+    ({"seg_rate": 120.0}, "segment rates"),
 ])
 def test_real_differences_are_detected(tmp_path, override, expect):
     prev, cur = tmp_path / "prev", tmp_path / "cur"
     _write_artifacts(prev)
     _write_artifacts(cur, **override)
     assert R.artifacts_changed(prev, cur) == [expect]
+
+
+def test_tiny_rate_drift_is_noise_but_a_real_move_is_not(tmp_path):
+    prev, cur = tmp_path / "prev", tmp_path / "cur"
+    _write_artifacts(prev, seg_rate=100.0)
+    _write_artifacts(cur, seg_rate=100.4)                          # 0.4%: platform noise
+    assert R.artifacts_changed(prev, cur) == []
+    _write_artifacts(cur, seg_rate=103.0)                          # 3%: a real change
+    assert R.artifacts_changed(prev, cur) == ["segment rates"]
 
 
 def test_grid_cell_added_or_missing_file_counts_as_change(tmp_path):
@@ -228,3 +240,35 @@ def test_grid_cell_added_or_missing_file_counts_as_change(tmp_path):
 def test_signals_builder_output_is_sorted():
     src = (Path(__file__).parent.parent / "build_signals.py").read_text()
     assert "pts.sort()" in src
+
+
+# ---------- the gate judges "safer" by the metric that matches the crash model ----------
+
+def pv_route(change=-20.0, conc=0.65, model="exposure"):
+    return {"model": model, "primary_metric": "pv", "pair_concordance": conc,
+            "profiles": {"teen": {"primary_change_pct": change, "pv_change_pct": change, "held_change_pct": -0.5},
+                         "elderly": {"primary_change_pct": change, "pv_change_pct": change, "held_change_pct": -0.5}}}
+
+
+def test_per_vehicle_metric_is_used_for_the_exposure_model():
+    # crashes counted along the route barely moved (-0.5%), which would fail the old rule; per-vehicle risk fell 20%
+    ok, fails, _ = R.decide(good_checks(route=pv_route(-20.0)), None)
+    assert ok and fails == []
+    ok, fails, _ = R.decide(good_checks(route=pv_route(-5.0)), None)       # only 5% safer per vehicle: below the -8% bar
+    assert not ok and any("per-vehicle crash risk" in f and "no longer meaningfully safer" in f for f in fails)
+
+
+def test_per_vehicle_regression_is_compared_only_on_the_same_basis():
+    last = {"route": pv_route(-22.0)}
+    ok, fails, _ = R.decide(good_checks(route=pv_route(-17.0)), last)      # fell 5 points: more than the 4-point tolerance
+    assert not ok and any("regressed" in f for f in fails)
+    ok, _, _ = R.decide(good_checks(route=pv_route(-19.0)), last)          # fell 3 points: within tolerance
+    assert ok
+    old_grid_entry = {"route": {"model": "grid", "primary_metric": "held", "profiles": {"teen": {"primary_change_pct": -4.1}}}}
+    ok, _, _ = R.decide(good_checks(route=pv_route(-10.0)), old_grid_entry)  # different basis: no regression comparison
+    assert ok
+
+
+def test_old_style_metrics_without_primary_fields_still_work():
+    ok, fails, _ = R.decide(good_checks(), None)                           # good_checks has only held_change_pct
+    assert ok and not fails

@@ -9,7 +9,7 @@ An iOS navigation app that finds the **safest** driving route rather than the fa
 ## How "safe" is defined (backend computes it; the app only displays it)
 
 The backend asks a routing engine (GraphHopper) for several alternative routes, then scores each one against:
-- historical crash density (Austin Vision Zero data, via `data/`'s `crash_risk(geometry)`)
+- historical crash risk from Austin Vision Zero crashes, via `data/`'s `crash_risk(geometry)`: measured per vehicle-mile on roads with TxDOT traffic counts, crash density elsewhere
 - dangerous maneuvers (unprotected left turns, highway merges, roundabouts, U-turns)
 - road characteristics (speed limit, lanes, lighting)
 - for sensitive passengers, ride comfort (rough surface, sharp curves)

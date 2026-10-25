@@ -18,7 +18,7 @@ What it does
      - a rolling backtest (train through two years ago, test on the rest) captures enough crashes and has
        not dropped much since the last accepted run,
      - the 200-trip route evaluation (cached routes re-scored offline, no GraphHopper or TomTom needed) still
-       shows the safest route is meaningfully safer, and the route score still predicts later crashes,
+       shows the safest route is meaningfully safer (per vehicle), and the route score still predicts later crashes,
      - the unit tests pass.
 4. Accepted: new files stay, history.json and eval/REFRESH_REPORT.md are updated (the GitHub workflow then
    opens a pull request for a human to merge). Rejected: every file is restored and the reasons are logged.
@@ -44,7 +44,7 @@ REPORT = HERE / "eval" / "REFRESH_REPORT.md"
 BACKUP = HERE / "raw" / "refresh_backup"
 GRID = HERE / "risk.geojson"
 # everything the pipeline writes and tracks in git; restored together on rejection
-ARTIFACTS = ["risk.geojson", "profile_ratios.json", "signals.json", "street_condition.json", "weather_effect.json",
+ARTIFACTS = ["risk.geojson", "segment_rates.json", "profile_ratios.json", "signals.json", "street_condition.json", "weather_effect.json",
              "eval/results.csv", "eval/REPORT.md", "eval/metrics.json"]
 
 # ---- gate thresholds (see the module docstring) ----
@@ -52,8 +52,11 @@ CELL_RATIO_RANGE = (0.85, 1.30)    # new square count / previous square count
 SIMILARITY_MIN = 0.95              # Pearson correlation of risk over squares in both grids
 BACKTEST_FLOOR = 0.50              # share of later crashes in the top 10% of squares (currently ~0.58)
 BACKTEST_MAX_DROP = 0.03           # vs the last accepted run
-ROUTE_HELD_MAX = -2.0              # safest route must cut held-out crashes by at least this % (currently ~-4%)
-ROUTE_MAX_REGRESS = 2.0            # percentage points worse than the last accepted run
+# "Safer" is judged on the metric that matches the crash model (metrics.json "primary_metric"):
+#   pv   = realized crashes per vehicle-mile along the route (exposure model; currently about -20%)
+#   held = crashes counted along the route (grid model; about -4%)
+ROUTE_PRIMARY_MAX = {"pv": -8.0, "held": -2.0}      # the safest route must cut the primary metric by at least this %
+ROUTE_MAX_REGRESS = {"pv": 4.0, "held": 2.0}        # percentage points worse than the last accepted run
 CONCORDANCE_MIN = 0.55             # route-pair agreement between model score and later crashes (chance = 0.5)
 DRIFT_WARN_UPPER = 0.40            # warn if even the optimistic end of the forward capture is below this
 REQUIRED_PROPS = ("ix", "iy", "risk", "left_risk", "risk_teen", "risk_elderly")
@@ -145,12 +148,17 @@ def decide(checks: dict, last: dict | None) -> tuple[bool, list[str], list[str]]
     route = checks.get("route")
     if route:
         prev_route = (last or {}).get("route") or {}
+        metric = route.get("primary_metric", "held")
+        label = {"pv": "per-vehicle crash risk", "held": "crashes along the route"}[metric]
+        same_basis = prev_route.get("primary_metric", "held") == metric and prev_route.get("model") == route.get("model")
+        value = lambda m: m.get("primary_change_pct", m.get("held_change_pct"))  # noqa: E731
         for prof, m in route["profiles"].items():
-            if m["held_change_pct"] > ROUTE_HELD_MAX:
-                fails.append(f"{prof}: safest route no longer meaningfully safer ({m['held_change_pct']:+.1f}% held-out crashes, need <= {ROUTE_HELD_MAX}%)")
+            v = value(m)
+            if v > ROUTE_PRIMARY_MAX[metric]:
+                fails.append(f"{prof}: safest route no longer meaningfully safer ({v:+.1f}% {label}, need <= {ROUTE_PRIMARY_MAX[metric]}%)")
             was = (prev_route.get("profiles") or {}).get(prof)
-            if was and m["held_change_pct"] > was["held_change_pct"] + ROUTE_MAX_REGRESS:
-                fails.append(f"{prof}: route benefit regressed {was['held_change_pct']:+.1f}% -> {m['held_change_pct']:+.1f}%")
+            if same_basis and was and v > value(was) + ROUTE_MAX_REGRESS[metric]:
+                fails.append(f"{prof}: route benefit regressed {value(was):+.1f}% -> {v:+.1f}% ({label})")
         conc = route.get("pair_concordance")
         if conc is not None and conc < CONCORDANCE_MIN:
             fails.append(f"route score no longer predicts later crashes (pair agreement {conc:.2f} < {CONCORDANCE_MIN})")
@@ -213,7 +221,7 @@ def rebuild() -> list[str]:
     """Rebuild every artifact; returns error messages (empty = ok)."""
     errors = []
     import analyze_weather as aw
-    steps = [["build_signals.py"], ["build_pavement.py"], ["calibrate_profiles.py"], ["build_risk.py"]]
+    steps = [["build_signals.py"], ["build_pavement.py"], ["calibrate_profiles.py"], ["build_risk.py"], ["build_exposure.py"]]
     if aw.needed():
         steps.append(["analyze_weather.py"])
     for step in steps:
@@ -304,6 +312,11 @@ def artifacts_changed(prev_dir: Path, cur_dir: Path) -> list[str]:
     key = lambda seg: (seg[0], seg[1], tuple(map(tuple, seg[2])))  # noqa: E731
     if a is None or b is None or sorted(map(key, a)) != sorted(map(key, b)):
         changed.append("street condition")
+    a, b = load(prev_dir, "segment_rates.json"), load(cur_dir, "segment_rates.json")
+    if a is None or b is None or any(
+            len(a.get(k, [])) != len(b.get(k, [])) or not np.allclose(a.get(k, []), b.get(k, []), rtol=0.01, atol=0.02)
+            for k in ("rate", "teen", "elderly")):
+        changed.append("segment rates")
     for name in ("profile_ratios.json", "weather_effect.json"):
         if load(prev_dir, name) != load(cur_dir, name):
             changed.append(name.removesuffix(".json").replace("_", " "))
@@ -345,9 +358,12 @@ def render_report(entry: dict, fails: list, warns: list) -> str:
     if r:
         L.append(f"- Route evaluation ({r['trips']} cached trips, {r['held_out_crashes']:,} held-out crashes): "
                  f"score/crash pair agreement **{r['pair_concordance']:.0%}**")
+        pv = r.get("primary_metric") == "pv"
+        L.append(f"  - crash model: {r.get('model', 'grid')}; 'safer' = {'realized crashes per vehicle-mile' if pv else 'crashes along the route'}")
         for prof, m in r["profiles"].items():
+            v = m.get("primary_change_pct", m.get("held_change_pct"))
             L.append(f"  - {prof}: reroutes {m['changed_share']:.0%} of trips, {m['minutes_added']:+.2f} min, "
-                     f"held-out crashes **{m['held_change_pct']:+.1f}%**")
+                     f"{'per-vehicle risk' if pv else 'held-out crashes'} **{v:+.1f}%**")
     L.append(f"- Unit tests: {c.get('tests', 'not run')}")
     L += ["", "_Pass/fail is decided by fixed numeric thresholds in `data/refresh.py`; see its docstring._"]
     return "\n".join(L) + "\n"
