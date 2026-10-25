@@ -466,12 +466,22 @@ def test_live_minutes_retries_once_on_rate_limit(monkeypatch):
 
 # ---------- measured profiles, signals, bridges ----------
 
+def test_profiles_differ_in_maneuver_strictness():
+    P = scoring.PROFILES
+    assert P["teen"]["merge"] == P["car"]["merge"]
+    for k in scoring.MANEUVER_KEYS:                                   # elderly strictest, then sensitive, then teen
+        assert P["elderly"][k] > P["sensitive_passenger"][k] > P["teen"][k] == P["car"][k]
+    R = __import__("app").ROUTING_RULES
+    assert R["elderly"]["beta"] > R["sensitive_passenger"]["beta"] > R["teen"]["beta"]
+    assert R["elderly"]["min_gain"] < R["sensitive_passenger"]["min_gain"] < R["teen"]["min_gain"]
+
+
 def test_profiles_differ_only_by_measured_things():
     P = scoring.PROFILES
     ratios = json.loads((Path(__file__).parent.parent / "profile_ratios.json").read_text())
     assert P["teen"]["left_crash"] == pytest.approx(P["car"]["left_crash"] * ratios["teen"]["ratios"]["left-turn"])
     assert P["elderly"]["left_crash"] == pytest.approx(P["car"]["left_crash"] * ratios["elderly"]["ratios"]["left-turn"])
-    ignore = {"left_crash", "curve", "rough"}
+    ignore = {"left_crash", "curve", "rough", *scoring.MANEUVER_KEYS}    # maneuver strictness is a product choice, tested above
     for name in ("teen", "elderly", "sensitive_passenger"):          # everything else is the car baseline
         assert {k: v for k, v in P[name].items() if k not in ignore} == {k: v for k, v in P["car"].items() if k not in ignore}
     assert P["sensitive_passenger"]["curve"] > 0 and P["teen"]["curve"] == P["elderly"]["curve"] == 0

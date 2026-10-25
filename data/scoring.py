@@ -80,9 +80,18 @@ def _measured_ratio(profile, ctype):
 # how much to penalise curves and rough streets is an assumption. Other maneuver weights stay at the car baseline.
 PROFILES["teen"] = {**PROFILES["car"],
                     "left_crash": PROFILES["car"]["left_crash"] * _measured_ratio("teen", "left-turn")}
-PROFILES["elderly"] = {**PROFILES["car"],
+# Product choices (not measured): how much each group should avoid demanding maneuvers. Elderly avoids them most,
+# sensitive passengers somewhat more than the baseline, teen at the baseline.
+MANEUVER_KEYS = ("left", "sharp_left", "left_major", "merge", "roundabout", "u_turn", "quick_after_exit")
+
+
+def _scaled(base: dict, factor: float) -> dict:
+    return {k: (v * factor if k in MANEUVER_KEYS else v) for k, v in base.items()}
+
+
+PROFILES["elderly"] = {**_scaled(PROFILES["car"], 1.5),
                        "left_crash": PROFILES["car"]["left_crash"] * _measured_ratio("elderly", "left-turn")}
-PROFILES["sensitive_passenger"] = {**PROFILES["car"], "curve": 0.03, "rough": 6.0}
+PROFILES["sensitive_passenger"] = {**_scaled(PROFILES["car"], 1.25), "curve": 0.03, "rough": 6.0}
 # index into the grid cell tuple (risk, speed, left_risk, risk_teen, risk_elderly)
 PROFILE_LAYER = {"teen": 3, "elderly": 4}
 ALIASES = {"driving": "car", "auto": "car", "cycling": "bike", "bicycle": "bike",
