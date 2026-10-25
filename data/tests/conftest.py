@@ -5,3 +5,4 @@ import os
 os.environ["GH_URL"] = ""
 os.environ["TOMTOM_API_KEY"] = ""  # same for TomTom: tests never call it unless they patch live.* themselves
 os.environ["WEATHER_DISABLED"] = "1"  # tests never call Open-Meteo unless they patch weather.* themselves
+os.environ["LLM_DISABLED"] = "1"  # tests never call Gemini unless they patch llm._call themselves
