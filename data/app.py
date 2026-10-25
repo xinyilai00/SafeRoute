@@ -85,9 +85,9 @@ def health():
 #               detour must cut risk by more than it adds time (scaled by beta). beta 1 is an even
 #               trade; higher means the profile pays more time for safety.
 ROUTING_RULES = {
-    "teen": {"max_detour": 1.30, "min_gain": 0.05, "beta": 1.5},
-    "elderly": {"max_detour": 1.30, "min_gain": 0.03, "beta": 1.5},
-    "sensitive_passenger": {"max_detour": 1.30, "min_gain": 0.03, "beta": 1.5},
+    "teen": {"max_detour": 1.30, "min_gain": 0.05, "beta": 2.0},
+    "elderly": {"max_detour": 1.30, "min_gain": 0.03, "beta": 2.5},
+    "sensitive_passenger": {"max_detour": 1.30, "min_gain": 0.03, "beta": 2.5},
 }
 # Chosen on the development era (models built through 2021, judged on 2022-23), where per-vehicle risk reduction is flat
 # at about -20% to -23% for any cap from 1.20 up and extra minutes buy almost nothing beyond ~1.30 / beta 1.5.

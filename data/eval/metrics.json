@@ -9,28 +9,28 @@
   "rank_corr": 0.7186,
   "profiles": {
     "elderly": {
-      "changed_share": 0.275,
-      "minutes_added": 0.4886,
-      "held_change_pct": -0.459,
-      "pv_change_pct": -23.37,
-      "primary_change_pct": -23.37,
-      "ksi_change_pct": -1.298
+      "changed_share": 0.295,
+      "minutes_added": 0.5459,
+      "held_change_pct": -0.674,
+      "pv_change_pct": -24.524,
+      "primary_change_pct": -24.524,
+      "ksi_change_pct": -1.607
     },
     "sensitive_passenger": {
-      "changed_share": 0.265,
-      "minutes_added": 0.444,
-      "held_change_pct": 0.4,
-      "pv_change_pct": -22.707,
-      "primary_change_pct": -22.707,
-      "ksi_change_pct": -0.392
+      "changed_share": 0.28,
+      "minutes_added": 0.5126,
+      "held_change_pct": -0.062,
+      "pv_change_pct": -23.135,
+      "primary_change_pct": -23.135,
+      "ksi_change_pct": -1.175
     },
     "teen": {
-      "changed_share": 0.255,
-      "minutes_added": 0.4705,
-      "held_change_pct": -0.469,
-      "pv_change_pct": -23.315,
-      "primary_change_pct": -23.315,
-      "ksi_change_pct": -1.813
+      "changed_share": 0.27,
+      "minutes_added": 0.5106,
+      "held_change_pct": -0.399,
+      "pv_change_pct": -24.639,
+      "primary_change_pct": -24.639,
+      "ksi_change_pct": -1.463
     }
   }
 }

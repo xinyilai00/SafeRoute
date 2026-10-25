@@ -3,6 +3,8 @@
     python evaluate.py                  # 200 trips x 3 profiles, real GraphHopper + TomTom
     python evaluate.py --trips 20       # quick run
     python evaluate.py --analyze-only   # re-analyze cached routes without calling any API
+    python evaluate.py --analyze-only --half tune   # tune settings on the even-numbered trips
+    python evaluate.py --analyze-only --half test   # report final settings on the odd-numbered trips, once
 
 Test design
 -----------
@@ -403,6 +405,9 @@ def main() -> None:
     ap.add_argument("--trips", type=int, default=200)
     ap.add_argument("--seed", type=int, default=SEED)
     ap.add_argument("--analyze-only", action="store_true")
+    ap.add_argument("--half", choices=("tune", "test"),
+                    help="score only even (tune) or odd (test) trip ids, so settings tuned on one half "
+                         "are reported on trips they were not tuned on")
     args = ap.parse_args()
 
     use_train_grid()
@@ -418,6 +423,8 @@ def main() -> None:
         trips = fetch_trips(args.trips, args.seed, cache)
         with gzip.open(TRIPS_GZ, "wt") as f:
             json.dump(trips, f, separators=(",", ":"))
+    if args.half:
+        trips = [t for t in trips if t["id"] % 2 == (0 if args.half == "tune" else 1)]
     print(f"{len(trips)} trips; scoring with the grid built from crashes through {TRAIN_UNTIL}")
     held = HeldOut()
     realized = RealizedRisk() if be.SEGMENTS_PATH.exists() else None
@@ -429,7 +436,8 @@ def main() -> None:
     header = (f"# Router evaluation ({len(trips)} trips x {len(PROFILES)} profiles = {len(df)} cases)\n\nCrash model: {model}.\n\n"
               f"Models built only from crashes through {TRAIN_UNTIL}; \"safer\" is judged on crashes from {TRAIN_UNTIL + 1} on that "
               f"neither model saw: realized crashes per vehicle-mile along the route (the primary measure for the exposure "
-              f"model) and crashes counted within {BUFFER_M:.0f} m of the route (which also rewards avoiding busy roads). Seed {args.seed}.\n\n")
+              f"model) and crashes counted within {BUFFER_M:.0f} m of the route (which also rewards avoiding busy roads). Seed {args.seed}."
+              + (f" {args.half.capitalize()} half only." if args.half else "") + "\n\n")
     (OUT / "REPORT.md").write_text(header + text + "\n")
     print("\n" + header + text)
     print(f"\nwrote {OUT / 'results.csv'} and {OUT / 'REPORT.md'}")
