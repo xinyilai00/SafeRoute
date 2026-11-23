@@ -176,5 +176,72 @@
   "changed": [
    "segment rates"
   ]
+ },
+ {
+  "date": "2026-11-23T20:39:20+00:00",
+  "data_through": "2026-11-06T01:18:00",
+  "crashes": 233771,
+  "cells": 9626,
+  "forward": {
+   "n": 888,
+   "hits": 503,
+   "capture": 0.5664414414414415,
+   "ci": [
+    0.5336,
+    0.5987
+   ]
+  },
+  "new_crashes_note": "crashes dated after the previous grid's data cutoff (2026-10-09)",
+  "backtest": 0.5873,
+  "backtest_detail": {
+   "train_until": 2024,
+   "test_crashes": 21027,
+   "capture10": 0.5873
+  },
+  "route": {
+   "model": "exposure",
+   "primary_metric": "pv",
+   "trips": 200,
+   "cases": 600,
+   "held_out_crashes": 33108,
+   "pair_concordance": 0.8323,
+   "pair_concordance_crash_count": 0.3861,
+   "rank_corr": 0.7359,
+   "profiles": {
+    "elderly": {
+     "changed_share": 0.33,
+     "minutes_added": 0.5804,
+     "held_change_pct": -0.648,
+     "pv_change_pct": -24.885,
+     "primary_change_pct": -24.885,
+     "ksi_change_pct": -1.411
+    },
+    "sensitive_passenger": {
+     "changed_share": 0.29,
+     "minutes_added": 0.5185,
+     "held_change_pct": 0.469,
+     "pv_change_pct": -24.321,
+     "primary_change_pct": -24.321,
+     "ksi_change_pct": 0.02
+    },
+    "teen": {
+     "changed_share": 0.255,
+     "minutes_added": 0.407,
+     "held_change_pct": -0.773,
+     "pv_change_pct": -22.181,
+     "primary_change_pct": -22.181,
+     "ksi_change_pct": -1.733
+    }
+   }
+  },
+  "tests": "95 passed, 1 warning in 4.46s",
+  "similarity": 0.9992943226450449,
+  "status": "accepted",
+  "changed": [
+   "risk grid",
+   "signals",
+   "segment rates",
+   "profile ratios"
+  ]
  }
 ]

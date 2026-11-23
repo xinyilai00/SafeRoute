@@ -3,34 +3,34 @@
   "primary_metric": "pv",
   "trips": 200,
   "cases": 600,
-  "held_out_crashes": 32182,
-  "pair_concordance": 0.8209,
-  "pair_concordance_crash_count": 0.3844,
-  "rank_corr": 0.7186,
+  "held_out_crashes": 33108,
+  "pair_concordance": 0.8323,
+  "pair_concordance_crash_count": 0.3861,
+  "rank_corr": 0.7359,
   "profiles": {
     "elderly": {
-      "changed_share": 0.32,
-      "minutes_added": 0.5606,
-      "held_change_pct": -0.762,
-      "pv_change_pct": -24.44,
-      "primary_change_pct": -24.44,
-      "ksi_change_pct": -1.587
+      "changed_share": 0.33,
+      "minutes_added": 0.5804,
+      "held_change_pct": -0.648,
+      "pv_change_pct": -24.885,
+      "primary_change_pct": -24.885,
+      "ksi_change_pct": -1.411
     },
     "sensitive_passenger": {
-      "changed_share": 0.28,
-      "minutes_added": 0.482,
-      "held_change_pct": 0.173,
-      "pv_change_pct": -22.896,
-      "primary_change_pct": -22.896,
-      "ksi_change_pct": -0.824
+      "changed_share": 0.29,
+      "minutes_added": 0.5185,
+      "held_change_pct": 0.469,
+      "pv_change_pct": -24.321,
+      "primary_change_pct": -24.321,
+      "ksi_change_pct": 0.02
     },
     "teen": {
-      "changed_share": 0.24,
-      "minutes_added": 0.3735,
-      "held_change_pct": -0.775,
-      "pv_change_pct": -20.94,
-      "primary_change_pct": -20.94,
-      "ksi_change_pct": -2.164
+      "changed_share": 0.255,
+      "minutes_added": 0.407,
+      "held_change_pct": -0.773,
+      "pv_change_pct": -22.181,
+      "primary_change_pct": -22.181,
+      "ksi_change_pct": -1.733
     }
   }
 }
