@@ -1,13 +1,13 @@
 {
   "baseline": {
-    "crashes": 8254,
+    "crashes": 8285,
     "share": {
-      "left-turn": 0.18451659801308457,
-      "single-vehicle": 0.4273079718924158,
-      "rear-end/stopped": 0.0760843227526048,
-      "angle": 0.14405136903319601,
-      "opposite-direction": 0.035013326871819725,
-      "other": 0.1330264114368791
+      "left-turn": 0.1843089921544961,
+      "single-vehicle": 0.428002414001207,
+      "rear-end/stopped": 0.07604103802051901,
+      "angle": 0.143995171997586,
+      "opposite-direction": 0.034882317441158724,
+      "other": 0.1327700663850332
     }
   },
   "shrink_k": 20.0,
@@ -17,9 +17,9 @@
       15,
       19
     ],
-    "crashes": 422,
+    "crashes": 423,
     "counts": {
-      "left-turn": 74,
+      "left-turn": 75,
       "single-vehicle": 201,
       "rear-end/stopped": 19,
       "angle": 55,
@@ -27,20 +27,20 @@
       "other": 52
     },
     "raw_ratios": {
-      "left-turn": 0.95,
-      "single-vehicle": 1.115,
-      "rear-end/stopped": 0.592,
-      "angle": 0.905,
-      "opposite-direction": 1.421,
+      "left-turn": 0.962,
+      "single-vehicle": 1.11,
+      "rear-end/stopped": 0.591,
+      "angle": 0.903,
+      "opposite-direction": 1.423,
       "other": 0.926
     },
     "ratios": {
-      "left-turn": 0.96,
-      "single-vehicle": 1.103,
+      "left-turn": 0.97,
+      "single-vehicle": 1.099,
       "rear-end/stopped": 0.748,
-      "angle": 0.928,
-      "opposite-direction": 1.179,
-      "other": 0.946
+      "angle": 0.927,
+      "opposite-direction": 1.18,
+      "other": 0.945
     }
   },
   "elderly": {
@@ -48,30 +48,30 @@
       65,
       120
     ],
-    "crashes": 520,
+    "crashes": 524,
     "counts": {
-      "left-turn": 109,
-      "single-vehicle": 185,
+      "left-turn": 110,
+      "single-vehicle": 187,
       "rear-end/stopped": 39,
       "angle": 108,
       "opposite-direction": 15,
-      "other": 64
+      "other": 65
     },
     "raw_ratios": {
-      "left-turn": 1.136,
-      "single-vehicle": 0.833,
-      "rear-end/stopped": 0.986,
-      "angle": 1.442,
-      "opposite-direction": 0.824,
-      "other": 0.925
+      "left-turn": 1.139,
+      "single-vehicle": 0.834,
+      "rear-end/stopped": 0.979,
+      "angle": 1.431,
+      "opposite-direction": 0.821,
+      "other": 0.934
     },
     "ratios": {
-      "left-turn": 1.113,
-      "single-vehicle": 0.846,
-      "rear-end/stopped": 0.991,
-      "angle": 1.349,
-      "opposite-direction": 0.916,
-      "other": 0.942
+      "left-turn": 1.115,
+      "single-vehicle": 0.847,
+      "rear-end/stopped": 0.986,
+      "angle": 1.341,
+      "opposite-direction": 0.914,
+      "other": 0.949
     }
   }
 }
